@@ -1,0 +1,19 @@
+{
+  "name": "q5-carrot-repl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Q5 당근마켓 클론 — Auth + 상품 + 채팅",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "db:setup": "node setup-db.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
+  }
+}

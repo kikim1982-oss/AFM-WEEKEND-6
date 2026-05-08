@@ -1,0 +1,1305 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>당근레플 · Carrot Repl</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- ImageKit Upload SDK (browser, UMD) -->
+<script src="https://unpkg.com/imagekit-javascript@4.0.0/dist/imagekit.min.js"></script>
+<!-- TossPayments 결제위젯 v2 SDK -->
+<script src="https://js.tosspayments.com/v2/standard"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: { colors: { carrot: { DEFAULT: '#FF6F0F', dark: '#E55A00', light: '#FFE3CC' } } } }
+  };
+</script>
+<style>
+  html, body { background: #fafafa; }
+  .app { max-width: 480px; margin: 0 auto; min-height: 100vh; background: #fff; box-shadow: 0 0 0 1px #eee; }
+  .nav-btn[aria-current="page"] { color: #FF6F0F; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="root" class="app pb-16"></div>
+
+<script>
+// =========================================================================
+// API 클라이언트
+// =========================================================================
+const TOKEN_KEY = 'cm_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
+async function apiFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch(url, { ...opts, headers });
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* not json */ }
+  if (!res.ok) {
+    const msg = (data && data.error) || `요청 실패 (${res.status})`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+const api = {
+  get:    (url)       => apiFetch(url),
+  post:   (url, body) => apiFetch(url, { method: 'POST', body: JSON.stringify(body) }),
+  delete: (url)       => apiFetch(url, { method: 'DELETE' }),
+};
+
+// =========================================================================
+// 전역 상태
+// =========================================================================
+const state = {
+  currentUser: null,
+  authChecked: false,
+  listings: null,            // 목록 캐시 (현재 query 키 기준)
+  listingsKey: null,
+  listingsLoading: false,
+  listingDetail: {},         // id -> { ...listing, isFavorited }
+  favoriteIds: new Set(),    // 내가 관심한 listing id 들
+  favoritesLoaded: false,
+  favorites: null,           // 마이페이지 관심 탭용 풀 데이터 (lazy)
+  detailImageIndex: {},      // id -> current image index
+  // 채팅
+  chatRoom: null,            // { listingId, peerId, peer, listing, messages: [], lastId, isLoaded }
+  conversations: null,       // 마이페이지 채팅 탭
+  chatPollTimer: null,
+  // 결제
+  tossClientKey: null,       // 캐시
+  payment: null,             // { listingId, order, widgets, error, isReady }
+  paymentResult: null,       // /payment/success 처리 결과 { status: 'pending'|'ok'|'fail', message, listingId }
+};
+
+// 카테고리/도자기 자산 (UI 표시용)
+const CATEGORIES = ['도자기', '생활용품', '전자기기', '의류', '기타'];
+const POT = [
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-1_gvG_qq5SB.jpg',
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-2_NAK0GfxOQC.jpg',
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-3_1ZdfD3aOH.jpg',
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-4_Fq6K0Dudlx.jpg',
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-5_xmBO763j3.jpg',
+  'https://ik.imagekit.io/kikim1982/dalhangari/products/product-6_EzYmp40VUc.jpg',
+];
+
+
+// =========================================================================
+// 데이터 로더 (fire-and-forget — 완료 시 render() 재호출)
+// =========================================================================
+function listingsQueryKey() {
+  const hash = location.hash || '';
+  const q   = (hash.match(/[?&]q=([^&]*)/) || [])[1] || '';
+  const cat = (hash.match(/[?&]category=([^&]*)/) || [])[1] || '';
+  const nb  = (hash.match(/[?&]nb=([^&]*)/) || [])[1] || '';
+  return {
+    key: `q=${q}|cat=${cat}|nb=${nb}`,
+    q:   decodeURIComponent(q),
+    cat: decodeURIComponent(cat),
+    nb:  decodeURIComponent(nb),
+  };
+}
+
+async function loadListings(force) {
+  const { key, q, cat, nb } = listingsQueryKey();
+  if (!force && state.listingsKey === key && state.listings) return;
+  state.listingsKey = key;
+  state.listingsLoading = true;
+  render();
+  const params = new URLSearchParams();
+  if (q)   params.set('q', q);
+  if (cat) params.set('category', cat);
+  if (nb === 'mine' && state.currentUser) params.set('neighborhood', state.currentUser.neighborhood);
+  try {
+    const { listings } = await api.get('/api/listings?' + params);
+    state.listings = listings;
+  } catch (e) {
+    state.listings = [];
+    console.error('listings load error:', e);
+  } finally {
+    state.listingsLoading = false;
+    render();
+  }
+}
+
+async function loadListing(id) {
+  if (state.listingDetail[id] && !state.listingDetail[id].error) return;
+  try {
+    const data = await api.get('/api/listings/' + id);
+    state.listingDetail[id] = { ...data.listing, isFavorited: !!data.isFavorited };
+    if (data.isFavorited) state.favoriteIds.add(id);
+  } catch (e) {
+    state.listingDetail[id] = { error: e.message };
+  }
+  render();
+}
+
+async function loadFavoriteIds() {
+  if (!state.currentUser) return;
+  try {
+    const { ids } = await api.get('/api/favorites/ids');
+    state.favoriteIds = new Set(ids);
+    state.favoritesLoaded = true;
+  } catch (e) {
+    console.error('favorites/ids load error:', e);
+  }
+}
+
+async function loadFavorites(force) {
+  if (!force && state.favorites) return;
+  try {
+    const { favorites } = await api.get('/api/favorites');
+    state.favorites = favorites;
+    state.favoriteIds = new Set(favorites.map(l => l.id));
+  } catch (e) {
+    state.favorites = [];
+    console.error('favorites load error:', e);
+  }
+  render();
+}
+
+// === 채팅 ===
+const CHAT_POLL_MS = 3000;
+
+function stopChatPoll() {
+  if (state.chatPollTimer) {
+    clearInterval(state.chatPollTimer);
+    state.chatPollTimer = null;
+  }
+}
+
+function appendMessages(arr) {
+  if (!state.chatRoom) return;
+  const seen = new Set(state.chatRoom.messages.map(m => m.id));
+  let maxId = state.chatRoom.lastId || 0;
+  let added = 0;
+  for (const m of arr) {
+    if (seen.has(m.id)) continue;
+    state.chatRoom.messages.push(m);
+    if (m.id > maxId) maxId = m.id;
+    added++;
+  }
+  state.chatRoom.lastId = maxId;
+  return added;
+}
+
+async function loadChatRoom(listingId, peerId) {
+  // 새 방으로 진입 — 이전 polling 정리하고 상태 초기화
+  stopChatPoll();
+  state.chatRoom = { listingId, peerId, peer: null, listing: null, messages: [], lastId: 0, isLoaded: false };
+
+  // listing + 메시지 동시 로드
+  try {
+    const [{ listing }, msgRes] = await Promise.all([
+      api.get('/api/listings/' + listingId),
+      api.get(`/api/messages?listingId=${listingId}&peerId=${encodeURIComponent(peerId)}`),
+    ]);
+    state.chatRoom.listing = listing;
+    appendMessages(msgRes.messages);
+    if (msgRes.peer) state.chatRoom.peer = msgRes.peer;
+    else if (state.chatRoom.messages.length > 0) {
+      // peer info 가 따로 안 옴 — 상품의 sellerNickname 또는 별도 사용자 조회 (간단히 우리가 안 알면 placeholder)
+    }
+    state.chatRoom.isLoaded = true;
+  } catch (e) {
+    state.chatRoom.error = e.message;
+    state.chatRoom.isLoaded = true;
+  }
+  render();
+  startChatPoll();
+}
+
+function startChatPoll() {
+  stopChatPoll();
+  state.chatPollTimer = setInterval(async () => {
+    if (!state.chatRoom) { stopChatPoll(); return; }
+    // 라우트가 chat 페이지 아니면 정리
+    if (!/^\/chat\//.test(currentPath())) { stopChatPoll(); return; }
+    try {
+      const { listingId, peerId, lastId } = state.chatRoom;
+      const url = `/api/messages?listingId=${listingId}&peerId=${encodeURIComponent(peerId)}&since=${lastId || 0}`;
+      const { messages } = await api.get(url);
+      const added = appendMessages(messages || []);
+      if (added > 0) renderChatMessages(true);
+    } catch (e) {
+      console.warn('chat poll error:', e.message);
+    }
+  }, CHAT_POLL_MS);
+}
+
+// 메시지 영역만 부분 갱신 (전체 render 시 입력창 포커스/스크롤 손실 방지)
+function renderChatMessages(scrollToBottom) {
+  if (!state.chatRoom) return;
+  const list = document.getElementById('chat-messages');
+  if (!list) { render(); return; }
+  list.innerHTML = chatMessagesHtml();
+  if (scrollToBottom) {
+    requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  }
+}
+
+function chatMessagesHtml() {
+  const me = state.currentUser && state.currentUser.id;
+  const msgs = (state.chatRoom && state.chatRoom.messages) || [];
+  if (msgs.length === 0) {
+    return `<div class="text-center text-gray-400 py-20 text-sm">대화를 시작해보세요</div>`;
+  }
+  return msgs.map(m => {
+    const mine = m.senderId === me;
+    return `
+      <div class="flex ${mine ? 'justify-end' : 'justify-start'} mb-2">
+        <div class="max-w-[75%] px-3 py-2 rounded-2xl text-sm ${mine ? 'bg-carrot text-white rounded-br-sm' : 'bg-gray-100 text-gray-800 rounded-bl-sm'} whitespace-pre-wrap">${escapeHtml(m.body)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+// === 결제 ===
+function hashQuery() {
+  // 토스 redirect 시 successUrl 의 query 가 hash 에 들어가지 않고
+  // location.search 에 들어가는 케이스 대응 — 둘 다 합쳐서 본다
+  const out = {};
+  if (location.search) {
+    for (const [k, v] of new URLSearchParams(location.search.slice(1))) out[k] = v;
+  }
+  const h = location.hash || '';
+  const qIdx = h.indexOf('?');
+  if (qIdx >= 0) {
+    for (const [k, v] of new URLSearchParams(h.slice(qIdx + 1))) out[k] = v;
+  }
+  return out;
+}
+
+async function ensureTossClientKey() {
+  if (state.tossClientKey) return state.tossClientKey;
+  const cfg = await api.get('/api/config');
+  state.tossClientKey = cfg.tossClientKey;
+  return state.tossClientKey;
+}
+
+async function initPayment(listingId) {
+  state.payment = { listingId, order: null, widgets: null, error: '', isReady: false, listing: null };
+  render();
+  try {
+    const [{ listing }, clientKey, order] = await Promise.all([
+      api.get('/api/listings/' + listingId),
+      ensureTossClientKey(),
+      api.post('/api/orders', { listingId }),
+    ]);
+    state.payment.listing = listing;
+    state.payment.order = order;
+    // 가격 표시 갱신 — 이 render 가 끝난 다음 슬롯이 안정되어야 토스가 그 안으로 그림.
+    // 이후 위젯이 슬롯에 그려진 뒤에는 절대 render() 다시 호출 X (DOM이 날아감)
+    render();
+
+    if (typeof window.TossPayments !== 'function') throw new Error('TossPayments SDK 로드 실패');
+
+    // 슬롯이 DOM 에 안정되도록 한 프레임 양보
+    await new Promise(r => requestAnimationFrame(() => r()));
+
+    const toss = window.TossPayments(clientKey);
+    const widgets = toss.widgets({ customerKey: order.customerKey });
+    await widgets.setAmount({ currency: 'KRW', value: order.amount });
+    await Promise.all([
+      widgets.renderPaymentMethods({ selector: '#toss-payment-methods', variantKey: 'DEFAULT' }),
+      widgets.renderAgreement({ selector: '#toss-agreement', variantKey: 'AGREEMENT' }),
+    ]);
+    state.payment.widgets = widgets;
+    state.payment.isReady = true;
+
+    // ⚠️ 여기서 render() 하면 위젯이 그려진 슬롯이 통째로 새 DOM 으로 교체되어 사라짐.
+    // 대신 "결제하기" 버튼만 활성화 + 핸들러 부착 (직접 DOM 패치).
+    const btn = document.getElementById('toss-pay-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '결제하기';
+      btn.addEventListener('click', () => requestTossPayment());
+    }
+  } catch (e) {
+    state.payment.error = e.message || String(e);
+    render(); // 에러 화면은 통째로 갈아끼워도 안전 (위젯 그려진 게 없음)
+  }
+}
+
+async function requestTossPayment() {
+  const p = state.payment;
+  if (!p || !p.widgets || !p.order) return;
+  const u = state.currentUser;
+  try {
+    await p.widgets.requestPayment({
+      orderId: p.order.orderId,
+      orderName: p.order.orderName,
+      successUrl: `${window.location.origin}/#/payment/success?listingId=${p.listingId}`,
+      failUrl:    `${window.location.origin}/#/payment/fail?listingId=${p.listingId}`,
+      customerEmail: u.email,
+      customerName: u.nickname,
+    });
+  } catch (e) {
+    if (e.code === 'USER_CANCEL') return;
+    state.payment.error = e.message || '결제 요청 중 오류';
+    render();
+  }
+}
+
+async function confirmPaymentFromHash() {
+  const q = hashQuery();
+  state.paymentResult = { status: 'pending', listingId: parseInt(q.listingId, 10) || null };
+  render();
+  if (!q.paymentKey || !q.orderId || !q.amount) {
+    state.paymentResult = { status: 'fail', message: '결제 정보가 누락되었습니다.', listingId: state.paymentResult.listingId };
+    render();
+    return;
+  }
+  try {
+    const r = await api.post('/api/payments/confirm', {
+      paymentKey: q.paymentKey,
+      orderId: q.orderId,
+      amount: Number(q.amount),
+    });
+    state.paymentResult = { status: 'ok', listingId: r.listingId, alreadyProcessed: !!r.alreadyProcessed };
+    // listing 캐시 무효화 — 다시 보면 SOLD 표시됨
+    delete state.listingDetail[r.listingId];
+    state.listings = null; state.listingsKey = null;
+  } catch (e) {
+    state.paymentResult = { status: 'fail', message: e.message || '결제 승인 실패', listingId: state.paymentResult.listingId };
+  }
+  render();
+}
+
+function readPaymentFailFromHash() {
+  const q = hashQuery();
+  state.paymentResult = {
+    status: 'fail',
+    message: q.message || '결제가 취소되었거나 실패했습니다.',
+    listingId: parseInt(q.listingId, 10) || null,
+  };
+  render();
+}
+
+async function loadConversations(force) {
+  if (!force && state.conversations) return;
+  try {
+    const { conversations } = await api.get('/api/conversations');
+    state.conversations = conversations;
+  } catch (e) {
+    state.conversations = [];
+    console.error('conversations load error:', e);
+  }
+  render();
+}
+
+async function toggleFavorite(id) {
+  const wasFav = state.favoriteIds.has(id);
+  // 낙관적 업데이트
+  if (wasFav) state.favoriteIds.delete(id);
+  else state.favoriteIds.add(id);
+  if (state.listingDetail[id]) state.listingDetail[id].isFavorited = !wasFav;
+  state.favorites = null; // 관심 탭 캐시 만료
+  render();
+  try {
+    if (wasFav) await api.delete('/api/favorites/' + id);
+    else        await api.post('/api/favorites/' + id);
+  } catch (e) {
+    // 롤백
+    if (wasFav) state.favoriteIds.add(id);
+    else state.favoriteIds.delete(id);
+    if (state.listingDetail[id]) state.listingDetail[id].isFavorited = wasFav;
+    alert('관심 처리에 실패했어요: ' + e.message);
+    render();
+  }
+}
+
+// =========================================================================
+// 라우터
+// =========================================================================
+const routes = [
+  { re: /^\/?$/,                                view: HomeView,           public: false, onEnter: () => loadListings() },
+  { re: /^\/login$/,                            view: LoginView,          public: true  },
+  { re: /^\/signup$/,                           view: SignupView,         public: true  },
+  { re: /^\/new$/,                              view: NewListingView,     public: false },
+  { re: /^\/listing\/(\d+)$/,                   view: ListingDetailView,  public: false, args: m => [parseInt(m[1], 10)], onEnter: m => loadListing(parseInt(m[1], 10)) },
+  { re: /^\/chat\/(\d+)\/([^/]+)$/,             view: ChatView,           public: false, args: m => [parseInt(m[1], 10), m[2]], onEnter: m => loadChatRoom(parseInt(m[1], 10), m[2]) },
+  { re: /^\/me(?:\/(listings|favorites|chats))?$/, view: MyPageView,    public: false, args: m => [m[1] || 'listings'], onEnter: m => {
+    const tab = m[1] || 'listings';
+    if      (tab === 'favorites') loadFavorites();
+    else if (tab === 'chats')     loadConversations();
+    else                          loadListings();
+  } },
+  { re: /^\/payment\/(\d+)$/,                   view: PaymentView,        public: false, args: m => [parseInt(m[1], 10)], onEnter: m => initPayment(parseInt(m[1], 10)) },
+  { re: /^\/payment\/success$/,                 view: PaymentResultView,  public: false, onEnter: () => confirmPaymentFromHash() },
+  { re: /^\/payment\/fail$/,                    view: PaymentResultView,  public: false, onEnter: () => readPaymentFailFromHash() },
+];
+
+function currentPath() {
+  const h = location.hash || '#/';
+  const raw = h.startsWith('#') ? h.slice(1) : h;
+  // query string 분리 — 라우트 정규식은 path 만 봄
+  const qIdx = raw.indexOf('?');
+  return qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+}
+function navigate(path) { location.hash = '#' + path; }
+
+let _navigatedFor = '';
+function render() {
+  const p = currentPath();
+  const root = document.getElementById('root');
+
+  if (!state.authChecked) {
+    root.innerHTML = `<div class="flex items-center justify-center min-h-screen text-gray-400">불러오는 중...</div>`;
+    return;
+  }
+
+  for (const r of routes) {
+    const m = p.match(r.re);
+    if (!m) continue;
+    if (!r.public && !state.currentUser) { navigate('/login'); return; }
+
+    // onEnter 는 라우트가 처음 매치될 때 한 번만 실행 (path 변경 시 재실행)
+    if (r.onEnter && _navigatedFor !== p) {
+      _navigatedFor = p;
+      r.onEnter(m);
+    }
+
+    const html = r.view(...(r.args ? r.args(m) : []));
+    root.innerHTML = html + (state.currentUser ? BottomNav() : '');
+    attachAfterRender();
+    window.scrollTo(0, 0);
+    return;
+  }
+  root.innerHTML = NotFoundView() + (state.currentUser ? BottomNav() : '');
+  attachAfterRender();
+}
+
+window.addEventListener('hashchange', () => {
+  // 해시 바뀔 때마다 onEnter 강제 재실행 가능하도록 키 리셋
+  _navigatedFor = '';
+  // chat 페이지를 떠나면 polling 정리
+  if (!/^\/chat\//.test(currentPath())) {
+    stopChatPoll();
+    state.chatRoom = null;
+  }
+  render();
+});
+
+async function boot() {
+  if (getToken()) {
+    try {
+      const { user } = await api.get('/api/auth/me');
+      state.currentUser = user;
+      await loadFavoriteIds();
+    } catch (e) {
+      clearToken();
+    }
+  }
+  state.authChecked = true;
+  render();
+}
+window.addEventListener('DOMContentLoaded', boot);
+
+// =========================================================================
+// 공용 유틸/컴포넌트
+// =========================================================================
+function fmtPrice(n) { return Number(n).toLocaleString('ko-KR') + '원'; }
+function timeAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '방금 전';
+  if (m < 60) return m + '분 전';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + '시간 전';
+  const d = Math.floor(h / 24);
+  return d + '일 전';
+}
+function statusBadge(s) {
+  if (s === 'SOLD')     return '<span class="text-xs bg-gray-700 text-white px-2 py-0.5 rounded">거래완료</span>';
+  if (s === 'RESERVED') return '<span class="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">예약중</span>';
+  return '';
+}
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function Header(title, opts = {}) {
+  const back = opts.back ? `<button onclick="history.back()" class="absolute left-3 top-1/2 -translate-y-1/2 text-2xl">‹</button>` : '';
+  const right = opts.right || '';
+  return `
+    <header class="sticky top-0 z-10 bg-white border-b h-14 flex items-center justify-center relative">
+      ${back}
+      <h1 class="font-bold text-lg">${escapeHtml(title)}</h1>
+      <div class="absolute right-3 top-1/2 -translate-y-1/2">${right}</div>
+    </header>
+  `;
+}
+
+function BottomNav() {
+  const p = currentPath();
+  const item = (href, label, icon) => {
+    const active = p === href || (href === '/me' && p.startsWith('/me'));
+    return `
+      <a href="#${href}" class="nav-btn flex-1 flex flex-col items-center justify-center text-xs ${active ? 'text-carrot' : 'text-gray-500'}" ${active ? 'aria-current="page"' : ''}>
+        <span class="text-xl">${icon}</span>
+        <span>${label}</span>
+      </a>
+    `;
+  };
+  return `
+    <nav class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t h-16 flex">
+      ${item('/',     '홈',     '🏠')}
+      ${item('/new',  '글쓰기', '✏️')}
+      ${item('/me',   '마이',   '👤')}
+    </nav>
+  `;
+}
+
+// =========================================================================
+// 화면별 뷰
+// =========================================================================
+function HomeView() {
+  const u = state.currentUser;
+  const { q: decodedQ, cat: decodedCat, nb: decodedNb } = listingsQueryKey();
+
+  // 카테고리 칩 — 다른 필터(q, nb)는 유지하면서 category 만 갱신
+  const buildHomeUrl = (overrides) => {
+    const params = {};
+    if (decodedQ)  params.q = decodedQ;
+    if (decodedCat) params.category = decodedCat;
+    if (decodedNb)  params.nb = decodedNb;
+    Object.assign(params, overrides);
+    const qs = Object.entries(params)
+      .filter(([_, v]) => v !== '' && v !== undefined && v !== null)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join('&');
+    return '#/' + (qs ? '?' + qs : '');
+  };
+
+  const chips = ['전체', ...CATEGORIES].map(c => {
+    const active = (c === '전체' && !decodedCat) || c === decodedCat;
+    const target = c === '전체' ? buildHomeUrl({ category: '' }) : buildHomeUrl({ category: c });
+    return `<a href="${target}" class="px-3 py-1 rounded-full text-sm border ${active ? 'bg-carrot text-white border-carrot' : 'bg-white text-gray-700 border-gray-300'}">${escapeHtml(c)}</a>`;
+  }).join('');
+
+  // 동네 토글
+  const nbAll  = !decodedNb;
+  const nbMine = decodedNb === 'mine';
+  const hood   = u ? u.neighborhood : '';
+  const nbToggle = `
+    <div class="flex gap-2 mb-3 text-sm">
+      <a href="${buildHomeUrl({ nb: '' })}"     class="px-3 py-1 rounded-lg ${nbAll  ? 'bg-carrot text-white' : 'bg-gray-100 text-gray-700'}">전체</a>
+      <a href="${buildHomeUrl({ nb: 'mine' })}" class="px-3 py-1 rounded-lg ${nbMine ? 'bg-carrot text-white' : 'bg-gray-100 text-gray-700'}">${escapeHtml(hood)} 만</a>
+    </div>
+  `;
+
+  let listHtml;
+  if (state.listings == null) {
+    listHtml = `<div class="text-center text-gray-400 py-20">불러오는 중...</div>`;
+  } else if (state.listings.length === 0) {
+    listHtml = `<div class="text-center text-gray-400 py-20">검색 결과가 없습니다</div>`;
+  } else {
+    listHtml = state.listings.map(l => `
+      <a href="#/listing/${l.id}" class="flex gap-3 py-4 border-b active:bg-gray-50">
+        <div class="w-24 h-24 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 relative">
+          <img src="${escapeHtml(l.images[0])}" class="w-full h-full object-cover" alt="" loading="lazy" />
+          ${l.status !== 'ON_SALE' ? `<div class="absolute inset-0 bg-black/40 flex items-center justify-center text-white text-sm font-medium">${l.status === 'SOLD' ? '거래완료' : '예약중'}</div>` : ''}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="font-medium line-clamp-2">${escapeHtml(l.title)}</div>
+          <div class="text-xs text-gray-500 mt-1">${escapeHtml(l.neighborhood)} · ${timeAgo(l.createdAt)}</div>
+          <div class="font-bold mt-1">${fmtPrice(l.price)}</div>
+        </div>
+      </a>
+    `).join('');
+  }
+
+  const userBadge = u ? `
+    <a href="#/me" class="flex items-center gap-1 text-xs">
+      <span class="font-medium">${escapeHtml(u.nickname)}</span>
+      <span class="text-gray-500">·</span>
+      <span class="text-gray-500">${escapeHtml(u.neighborhood)}</span>
+    </a>
+  ` : '';
+
+  return `
+    ${Header('당근레플', { right: userBadge })}
+    <div class="px-4 pt-3">
+      <form id="search-form" class="relative mb-3">
+        <input id="search-input" value="${escapeHtml(decodedQ)}" placeholder="검색어 입력" class="w-full bg-gray-100 rounded-lg px-4 py-2.5 pr-10 text-sm" />
+        <button type="submit" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</button>
+      </form>
+      ${nbToggle}
+      <div class="flex gap-2 overflow-x-auto scrollbar-hide pb-2">${chips}</div>
+    </div>
+    <div class="px-4">${listHtml}</div>
+    <a href="#/new" class="fixed bottom-20 left-1/2 -translate-x-1/2 ml-[160px] bg-carrot text-white w-14 h-14 rounded-full flex items-center justify-center text-2xl shadow-lg">+</a>
+  `;
+}
+
+function LoginView() {
+  return `
+    ${Header('로그인')}
+    <div class="px-6 pt-10">
+      <div class="text-center mb-8">
+        <div class="text-5xl mb-2">🥕</div>
+        <div class="text-xl font-bold">당근레플에 오신 걸 환영합니다</div>
+        <div class="text-xs text-gray-500 mt-2">시드: mangwon@test.com / 12345678</div>
+      </div>
+      <div id="login-error" class="hidden mb-3 text-sm text-red-600 text-center"></div>
+      <form id="login-form" class="space-y-3">
+        <input name="email" type="email" placeholder="이메일" required autocomplete="email" class="w-full border rounded-lg px-4 py-3" />
+        <input name="password" type="password" placeholder="비밀번호 (숫자 8자리)" pattern="\\d{8}" maxlength="8" required autocomplete="current-password" class="w-full border rounded-lg px-4 py-3" />
+        <button id="login-btn" class="w-full bg-carrot text-white rounded-lg py-3 font-medium disabled:bg-gray-300">로그인</button>
+      </form>
+      <a href="#/signup" class="block text-center mt-4 text-sm text-gray-600 underline">계정이 없으신가요? 회원가입</a>
+    </div>
+  `;
+}
+
+function SignupView() {
+  return `
+    ${Header('회원가입', { back: true })}
+    <div id="signup-error" class="hidden mx-6 mt-4 text-sm text-red-600 text-center"></div>
+    <form id="signup-form" class="px-6 pt-6 space-y-3">
+      <label class="block text-sm font-medium">이메일</label>
+      <input name="email" type="email" required autocomplete="email" class="w-full border rounded-lg px-4 py-3" />
+
+      <label class="block text-sm font-medium">비밀번호 (숫자 8자리)</label>
+      <input name="password" type="password" pattern="\\d{8}" maxlength="8" required autocomplete="new-password" class="w-full border rounded-lg px-4 py-3" />
+
+      <label class="block text-sm font-medium">닉네임</label>
+      <input name="nickname" minlength="2" maxlength="20" required class="w-full border rounded-lg px-4 py-3" />
+
+      <label class="block text-sm font-medium">동네 선택</label>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="border rounded-lg p-4 text-center has-[:checked]:bg-carrot/10 has-[:checked]:border-carrot cursor-pointer">
+          <input type="radio" name="neighborhood" value="망원동" class="hidden" required checked />
+          <div class="text-2xl">🏘️</div><div class="font-medium mt-1">망원동</div>
+        </label>
+        <label class="border rounded-lg p-4 text-center has-[:checked]:bg-carrot/10 has-[:checked]:border-carrot cursor-pointer">
+          <input type="radio" name="neighborhood" value="연남동" class="hidden" />
+          <div class="text-2xl">🏘️</div><div class="font-medium mt-1">연남동</div>
+        </label>
+      </div>
+      <p class="text-xs text-gray-500">프로토타입이라 두 동네만 지원해요.</p>
+
+      <button id="signup-btn" class="w-full bg-carrot text-white rounded-lg py-3 font-medium mt-4 disabled:bg-gray-300">가입하기</button>
+    </form>
+  `;
+}
+
+function NewListingView() {
+  const cats = CATEGORIES.map(c => `<option>${escapeHtml(c)}</option>`).join('');
+  const hood = state.currentUser ? state.currentUser.neighborhood : '';
+  return `
+    ${Header('상품 등록', { back: true })}
+    <div id="new-error" class="hidden mx-6 mt-4 text-sm text-red-600 text-center"></div>
+    <form id="new-form" class="px-6 pt-6 pb-8 space-y-4">
+      <label class="block text-sm font-medium">사진 (1~3장, JPG/PNG)</label>
+      <div id="img-slots" class="flex gap-2"></div>
+      <input id="file-input" type="file" accept="image/*" multiple class="hidden" />
+      <p id="upload-status" class="text-xs text-gray-500"></p>
+
+      <label class="block text-sm font-medium">제목</label>
+      <input name="title" minlength="2" maxlength="80" required class="w-full border rounded-lg px-4 py-3" placeholder="예) 안 쓰는 도자기 그릇 팝니다" />
+
+      <label class="block text-sm font-medium">카테고리</label>
+      <select name="category" class="w-full border rounded-lg px-4 py-3 bg-white">${cats}</select>
+
+      <label class="block text-sm font-medium">가격</label>
+      <input name="price" type="number" min="0" max="100000000" required class="w-full border rounded-lg px-4 py-3" placeholder="0" />
+
+      <label class="block text-sm font-medium">상품 설명</label>
+      <textarea name="description" rows="6" maxlength="2000" required class="w-full border rounded-lg px-4 py-3" placeholder="구매시기, 사용감, 하자 등을 자세히 적어주세요"></textarea>
+
+      <p class="text-xs text-gray-500">동네는 가입 시 선택한 <b>${escapeHtml(hood)}</b> 으로 자동 설정됩니다.</p>
+
+      <button id="new-btn" class="w-full bg-carrot text-white rounded-lg py-3 font-medium disabled:bg-gray-300">등록하기</button>
+    </form>
+  `;
+}
+
+function ListingDetailView(id) {
+  const cached = state.listingDetail[id];
+
+  if (!cached) {
+    return Header('', { back: true }) + `<div class="p-10 text-center text-gray-400">불러오는 중...</div>`;
+  }
+  if (cached.error) {
+    return Header('', { back: true }) + `<div class="p-10 text-center text-gray-500">${escapeHtml(cached.error)}</div>`;
+  }
+  const l = cached;
+  const u = state.currentUser;
+  const isMine = l.sellerId === (u && u.id);
+  const isFav = state.favoriteIds.has(l.id);
+
+  const totalImgs = l.images.length;
+  const curIdx = Math.min(state.detailImageIndex[id] || 0, totalImgs - 1);
+  const imgs = l.images.map((src, i) => `
+    <div class="snap-start shrink-0 w-full aspect-square bg-gray-100">
+      <img src="${escapeHtml(src)}" class="w-full h-full object-cover" alt="image-${i}" />
+    </div>
+  `).join('');
+
+  const indicator = totalImgs > 1 ? `
+    <div class="absolute right-3 top-3 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full">${curIdx + 1} / ${totalImgs}</div>
+  ` : '';
+
+  const buyDisabled = (l.status !== 'ON_SALE' || isMine);
+  const buyLabel = l.status === 'SOLD' ? '거래완료' : (l.status === 'RESERVED' ? '예약중' : (isMine ? '내 상품' : '구매하기'));
+
+  const deleteBtn = isMine ? `<button id="delete-btn" data-id="${l.id}" class="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-red-500">삭제</button>` : '';
+
+  return `
+    ${Header('', { back: true, right: deleteBtn })}
+    <div class="relative">
+      <div id="image-track" data-listing-id="${l.id}" class="snap-x snap-mandatory overflow-x-auto flex scrollbar-hide">${imgs}</div>
+      ${indicator}
+    </div>
+    <div class="px-4 pt-4 pb-32">
+      <div class="flex items-center gap-3 pb-4 border-b">
+        <div class="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xl">👤</div>
+        <div>
+          <div class="font-medium">${escapeHtml(l.sellerNickname || '판매자')}</div>
+          <div class="text-xs text-gray-500">${escapeHtml(l.neighborhood)}</div>
+        </div>
+      </div>
+      <h2 class="text-xl font-bold mt-4">${escapeHtml(l.title)} ${statusBadge(l.status)}</h2>
+      <div class="text-xs text-gray-500 mt-1">${escapeHtml(l.category)} · ${timeAgo(l.createdAt)}</div>
+      <p class="mt-4 text-gray-800 whitespace-pre-line leading-relaxed">${escapeHtml(l.description)}</p>
+    </div>
+
+    <div class="fixed bottom-16 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t px-4 py-3 flex items-center gap-3 z-20">
+      <button data-fav="${l.id}" class="text-2xl">${isFav ? '❤️' : '🤍'}</button>
+      <div class="border-l h-8"></div>
+      <div class="flex-1">
+        <div class="font-bold">${fmtPrice(l.price)}</div>
+        <button id="chat-go" class="text-xs text-gray-600 underline">채팅하기</button>
+      </div>
+      <button id="buy-btn" data-id="${l.id}" ${buyDisabled ? 'disabled' : ''} class="bg-carrot disabled:bg-gray-300 text-white px-5 py-2.5 rounded-lg font-medium">${buyLabel}</button>
+    </div>
+  `;
+}
+
+function ChatView(_listingId, _peerId) {
+  const room = state.chatRoom;
+  if (!room || !room.isLoaded) {
+    return Header('채팅', { back: true }) + `<div class="p-10 text-center text-gray-400">불러오는 중...</div>`;
+  }
+  if (room.error) {
+    return Header('채팅', { back: true }) + `<div class="p-10 text-center text-gray-500">${escapeHtml(room.error)}</div>`;
+  }
+
+  const peerName = (room.peer && room.peer.nickname)
+    || (room.listing && room.listing.sellerNickname)
+    || '상대방';
+  const l = room.listing || {};
+  const img = (l.images && l.images[0]) || '';
+
+  return `
+    ${Header(peerName, { back: true })}
+    ${l.title ? `
+      <a href="#/listing/${l.id}" class="flex items-center gap-3 px-4 py-3 border-b bg-gray-50">
+        ${img ? `<img src="${escapeHtml(img)}" class="w-12 h-12 rounded-lg object-cover" />` : `<div class="w-12 h-12 rounded-lg bg-gray-200"></div>`}
+        <div class="flex-1 min-w-0">
+          <div class="text-sm line-clamp-2">${escapeHtml(l.title)} ${statusBadge(l.status)}</div>
+          <div class="font-bold text-sm">${fmtPrice(l.price || 0)}</div>
+        </div>
+      </a>
+    ` : ''}
+    <div id="chat-messages" class="px-4 py-4 pb-32 overflow-y-auto" style="min-height: 50vh; max-height: calc(100vh - 14rem);">
+      ${chatMessagesHtml()}
+    </div>
+
+    <form id="chat-form" class="fixed bottom-16 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t px-3 py-2 flex gap-2 z-20">
+      <input name="body" required maxlength="1000" autocomplete="off" class="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm" placeholder="메시지를 입력하세요" />
+      <button class="bg-carrot text-white px-4 rounded-full text-sm font-medium">전송</button>
+    </form>
+  `;
+}
+
+function MyPageView(tab) {
+  const u = state.currentUser;
+  const tabBtn = (key, label) => `
+    <a href="#/me/${key}" class="flex-1 py-3 text-center text-sm border-b-2 ${tab === key ? 'border-carrot text-carrot font-medium' : 'border-transparent text-gray-500'}">${label}</a>
+  `;
+
+  let body = '';
+  if (tab === 'favorites') {
+    if (state.favorites == null) {
+      body = `<div class="text-center text-gray-400 py-20">불러오는 중...</div>`;
+    } else {
+      body = state.favorites.length === 0
+        ? `<div class="text-center text-gray-400 py-20">관심 상품이 없습니다</div>`
+        : state.favorites.map(listRow).join('');
+    }
+  } else if (tab === 'chats') {
+    if (state.conversations == null) {
+      body = `<div class="text-center text-gray-400 py-20">불러오는 중...</div>`;
+    } else if (state.conversations.length === 0) {
+      body = `<div class="text-center text-gray-400 py-20">채팅 내역이 없습니다</div>`;
+    } else {
+      body = state.conversations.map(c => {
+        const img = (c.listing.images && c.listing.images[0]) || '';
+        const preview = (c.lastFromMe ? '나: ' : '') + c.lastBody;
+        return `
+          <a href="#/chat/${c.listingId}/${encodeURIComponent(c.peerId)}" class="flex items-center gap-3 px-4 py-3 border-b">
+            ${img ? `<img src="${escapeHtml(img)}" class="w-12 h-12 rounded-lg object-cover" />` : `<div class="w-12 h-12 rounded-lg bg-gray-200"></div>`}
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-sm">${escapeHtml(c.peerNickname)} <span class="text-xs text-gray-400">· ${escapeHtml(c.peerNeighborhood)}</span></div>
+              <div class="text-xs text-gray-500 line-clamp-2">${escapeHtml(preview)}</div>
+            </div>
+            <div class="text-xs text-gray-400">${timeAgo(c.lastAt)}</div>
+          </a>
+        `;
+      }).join('');
+    }
+  } else {
+    if (state.listings == null) {
+      body = `<div class="text-center text-gray-400 py-20">불러오는 중...</div>`;
+    } else {
+      const mine = state.listings.filter(l => l.sellerId === u.id);
+      body = mine.length === 0
+        ? `<div class="text-center text-gray-400 py-20">등록한 상품이 없습니다</div>`
+        : mine.map(listRow).join('');
+    }
+  }
+
+  return `
+    ${Header('마이페이지', { right: `<button id="logout-btn" class="text-xs text-gray-500 underline">로그아웃</button>` })}
+    <div class="px-6 py-6 flex items-center gap-4 border-b">
+      <div class="w-16 h-16 rounded-full bg-carrot/20 flex items-center justify-center text-3xl">👤</div>
+      <div>
+        <div class="font-bold text-lg">${escapeHtml(u.nickname)}</div>
+        <div class="text-xs text-gray-500">${escapeHtml(u.neighborhood)} · ${escapeHtml(u.email)}</div>
+      </div>
+    </div>
+    <div class="flex border-b">
+      ${tabBtn('listings',  '내 상품')}
+      ${tabBtn('favorites', '관심')}
+      ${tabBtn('chats',     '채팅')}
+    </div>
+    <div>${body}</div>
+  `;
+}
+
+function listRow(l) {
+  return `
+    <a href="#/listing/${l.id}" class="flex gap-3 py-3 px-4 border-b">
+      <div class="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
+        <img src="${escapeHtml(l.images[0])}" class="w-full h-full object-cover" />
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="font-medium line-clamp-2">${escapeHtml(l.title)}</div>
+        <div class="text-xs text-gray-500 mt-1">${escapeHtml(l.neighborhood)} · ${timeAgo(l.createdAt)}</div>
+        <div class="font-bold mt-1">${fmtPrice(l.price)}</div>
+      </div>
+    </a>
+  `;
+}
+
+function PaymentView(listingId) {
+  const p = state.payment;
+  if (!p || p.listingId !== listingId) {
+    return Header('결제', { back: true }) + `<div class="p-10 text-center text-gray-400">불러오는 중...</div>`;
+  }
+  if (p.error) {
+    return Header('결제', { back: true }) + `
+      <div class="p-6">
+        <div class="text-center text-red-600 text-sm mb-3">${escapeHtml(p.error)}</div>
+        <a href="#/listing/${listingId}" class="block text-center text-sm text-gray-500 underline">상품으로 돌아가기</a>
+      </div>
+    `;
+  }
+  const l = p.listing || {};
+  const img = (l.images && l.images[0]) || '';
+  const orderReady = !!p.order;
+  return `
+    ${Header('결제', { back: true })}
+    <div class="px-4 pt-4 pb-32 space-y-4">
+      <div class="border rounded-lg p-3 flex gap-3 items-center bg-gray-50">
+        ${img ? `<img src="${escapeHtml(img)}" class="w-14 h-14 rounded-lg object-cover" />` : `<div class="w-14 h-14 rounded-lg bg-gray-200"></div>`}
+        <div class="flex-1 min-w-0">
+          <div class="text-sm line-clamp-2">${escapeHtml(l.title || '')}</div>
+          <div class="font-bold text-sm">${fmtPrice(l.price || 0)}</div>
+        </div>
+      </div>
+      <div class="text-xs text-gray-500">결제 금액 <b class="text-black">${orderReady ? fmtPrice(p.order.amount) : '-'}</b></div>
+      <div id="toss-payment-methods"></div>
+      <div id="toss-agreement"></div>
+    </div>
+
+    <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t px-4 py-3 z-20">
+      <button id="toss-pay-btn" ${p.isReady ? '' : 'disabled'} class="w-full bg-carrot disabled:bg-gray-300 text-white py-3 rounded-lg font-medium">${p.isReady ? '결제하기' : '준비 중...'}</button>
+      <div class="text-[10px] text-gray-400 text-center mt-1">TossPayments 테스트 환경 · 실결제 X</div>
+    </div>
+  `;
+}
+
+function PaymentResultView() {
+  const r = state.paymentResult;
+  if (!r) return Header('결제 결과', { back: true }) + `<div class="p-10 text-center text-gray-400">처리 중...</div>`;
+
+  if (r.status === 'pending') {
+    return Header('결제 승인 중', { back: false }) + `
+      <div class="p-10 text-center">
+        <div class="text-4xl mb-3 animate-pulse">⏳</div>
+        <div class="text-sm text-gray-600">결제를 승인하고 있어요...</div>
+      </div>
+    `;
+  }
+  if (r.status === 'ok') {
+    return Header('결제 완료') + `
+      <div class="p-10 text-center">
+        <div class="text-5xl mb-3">✅</div>
+        <div class="font-bold text-lg mb-1">결제가 완료됐어요!</div>
+        <div class="text-sm text-gray-500 mb-6">${r.alreadyProcessed ? '이미 처리된 결제예요.' : '거래완료 처리되었습니다.'}</div>
+        <a href="#/listing/${r.listingId || ''}" class="inline-block bg-carrot text-white px-5 py-2.5 rounded-lg font-medium">상품으로</a>
+        <a href="#/me/listings" class="inline-block ml-2 px-5 py-2.5 rounded-lg border">마이페이지</a>
+      </div>
+    `;
+  }
+  // fail
+  return Header('결제 실패', { back: true }) + `
+    <div class="p-10 text-center">
+      <div class="text-5xl mb-3">⚠️</div>
+      <div class="font-bold text-lg mb-1">결제에 실패했어요</div>
+      <div class="text-sm text-gray-500 mb-6">${escapeHtml(r.message || '')}</div>
+      ${r.listingId ? `<a href="#/listing/${r.listingId}" class="inline-block bg-carrot text-white px-5 py-2.5 rounded-lg font-medium">상품으로</a>` : ''}
+    </div>
+  `;
+}
+
+function NotFoundView() {
+  return `${Header('', { back: true })}<div class="text-center py-20 text-gray-500">없는 페이지입니다</div>`;
+}
+
+// =========================================================================
+// ImageKit 업로드 (단계 3 핵심)
+// =========================================================================
+async function uploadFilesToImageKit(files, onProgress) {
+  if (!window.ImageKit) throw new Error('ImageKit SDK 로드 실패');
+
+  const urls = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    onProgress && onProgress(i, 'uploading', 0);
+    // ImageKit token 은 1회용 — 파일마다 새로 발급
+    const auth = await api.get('/api/imagekit-auth');
+    const ik = new window.ImageKit({
+      publicKey:   auth.publicKey,
+      urlEndpoint: auth.urlEndpoint,
+    });
+    const res = await new Promise((resolve, reject) => {
+      ik.upload({
+        file: f,
+        fileName: `cm_${Date.now()}_${i}_${f.name.replace(/[^\w.\-]/g, '_')}`,
+        folder: '/carrot-repl',
+        token: auth.token,
+        expire: auth.expire,
+        signature: auth.signature,
+      }, (err, result) => err ? reject(err) : resolve(result));
+    });
+    urls.push(res.url);
+    onProgress && onProgress(i, 'done', 100);
+  }
+  return urls;
+}
+
+// =========================================================================
+// 폼 / 클릭 이벤트
+// =========================================================================
+function showError(elId, msg) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// 등록 폼 로컬 상태 (라우트 진입 시마다 리셋)
+const newFormState = { files: [], previews: [] };
+
+function renderImgSlots() {
+  const slots = document.getElementById('img-slots');
+  if (!slots) return;
+  const html = [0,1,2].map(i => {
+    const preview = newFormState.previews[i];
+    if (preview) {
+      return `
+        <div class="relative w-20 h-20">
+          <img src="${preview}" class="w-20 h-20 object-cover rounded-lg" />
+          <button type="button" data-remove="${i}" class="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-xs">×</button>
+        </div>
+      `;
+    }
+    return `<button type="button" data-add class="w-20 h-20 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center text-gray-400 text-2xl">+</button>`;
+  }).join('');
+  slots.innerHTML = html;
+
+  slots.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
+    document.getElementById('file-input').click();
+  }));
+  slots.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', () => {
+    const i = parseInt(b.dataset.remove, 10);
+    newFormState.files.splice(i, 1);
+    newFormState.previews.splice(i, 1);
+    renderImgSlots();
+  }));
+}
+
+function attachAfterRender() {
+  const sf = document.getElementById('search-form');
+  if (sf) sf.addEventListener('submit', e => {
+    e.preventDefault();
+    const v = document.getElementById('search-input').value.trim();
+    const { cat, nb } = listingsQueryKey();
+    const params = [];
+    if (v)   params.push('q=' + encodeURIComponent(v));
+    if (cat) params.push('category=' + encodeURIComponent(cat));
+    if (nb)  params.push('nb=' + encodeURIComponent(nb));
+    navigate('/' + (params.length ? '?' + params.join('&') : ''));
+  });
+
+  const lf = document.getElementById('login-form');
+  if (lf) lf.addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true; btn.textContent = '로그인 중...';
+    document.getElementById('login-error').classList.add('hidden');
+    try {
+      const { token, user } = await api.post('/api/auth/login', {
+        email: f.email.value.trim(),
+        password: f.password.value,
+      });
+      setToken(token);
+      state.currentUser = user;
+      state.listings = null; state.listingsKey = null; // 캐시 초기화
+      await loadFavoriteIds();
+      navigate('/');
+    } catch (err) {
+      showError('login-error', err.message);
+      btn.disabled = false; btn.textContent = '로그인';
+    }
+  });
+
+  const sgf = document.getElementById('signup-form');
+  if (sgf) sgf.addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = document.getElementById('signup-btn');
+    btn.disabled = true; btn.textContent = '가입 중...';
+    document.getElementById('signup-error').classList.add('hidden');
+    try {
+      const neighborhood = f.querySelector('input[name="neighborhood"]:checked')?.value;
+      const { token, user } = await api.post('/api/auth/register', {
+        email: f.email.value.trim(),
+        password: f.password.value,
+        nickname: f.nickname.value.trim(),
+        neighborhood,
+      });
+      setToken(token);
+      state.currentUser = user;
+      state.listings = null; state.listingsKey = null;
+      await loadFavoriteIds();
+      navigate('/');
+    } catch (err) {
+      showError('signup-error', err.message);
+      btn.disabled = false; btn.textContent = '가입하기';
+    }
+  });
+
+  // 상품 등록 폼
+  const nf = document.getElementById('new-form');
+  if (nf) {
+    // 진입 시 매번 로컬 상태 초기화
+    if (currentPath() === '/new' && nf.dataset.bound !== '1') {
+      newFormState.files = [];
+      newFormState.previews = [];
+      nf.dataset.bound = '1';
+    }
+    renderImgSlots();
+
+    const fileInput = document.getElementById('file-input');
+    fileInput.addEventListener('change', e => {
+      const picked = Array.from(e.target.files || []);
+      const remaining = 3 - newFormState.files.length;
+      const accept = picked.slice(0, Math.max(0, remaining));
+      for (const f of accept) {
+        if (!/^image\//.test(f.type)) continue;
+        if (f.size > 8 * 1024 * 1024) { alert('이미지 1장 최대 8MB'); continue; }
+        newFormState.files.push(f);
+        newFormState.previews.push(URL.createObjectURL(f));
+      }
+      e.target.value = '';
+      renderImgSlots();
+    });
+
+    nf.addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target;
+      const btn = document.getElementById('new-btn');
+      const errEl = document.getElementById('new-error');
+      const statusEl = document.getElementById('upload-status');
+      errEl.classList.add('hidden');
+      if (newFormState.files.length === 0) { showError('new-error', '사진을 1장 이상 올려주세요.'); return; }
+      btn.disabled = true; btn.textContent = '업로드 중...';
+      statusEl.textContent = '이미지 업로드 중... 0 / ' + newFormState.files.length;
+      try {
+        const urls = await uploadFilesToImageKit(newFormState.files, (i, _stage, _pct) => {
+          statusEl.textContent = `이미지 업로드 중... ${i + 1} / ${newFormState.files.length}`;
+        });
+        statusEl.textContent = '등록 중...';
+        const { listing } = await api.post('/api/listings', {
+          title: f.title.value.trim(),
+          price: Number(f.price.value),
+          description: f.description.value.trim(),
+          category: f.category.value,
+          imageUrls: urls,
+        });
+        // 로컬 상태/폼 초기화 + 목록 캐시 만료
+        newFormState.files = []; newFormState.previews = [];
+        state.listings = null; state.listingsKey = null;
+        delete state.listingDetail[listing.id];
+        navigate('/listing/' + listing.id);
+      } catch (err) {
+        showError('new-error', err.message || '등록 실패');
+        btn.disabled = false; btn.textContent = '등록하기';
+        statusEl.textContent = '';
+      }
+    });
+  }
+
+  // 구매하기
+  const buyBtn = document.getElementById('buy-btn');
+  if (buyBtn && !buyBtn.disabled) {
+    buyBtn.addEventListener('click', () => {
+      const id = parseInt(buyBtn.dataset.id, 10);
+      navigate('/payment/' + id);
+    });
+  }
+
+  // 토스 결제 버튼 (PaymentView)
+  const tossBtn = document.getElementById('toss-pay-btn');
+  if (tossBtn && !tossBtn.disabled) {
+    tossBtn.addEventListener('click', () => requestTossPayment());
+  }
+
+  const chatGo = document.getElementById('chat-go');
+  if (chatGo) chatGo.addEventListener('click', () => {
+    const p = currentPath();
+    const m = p.match(/^\/listing\/(\d+)$/);
+    if (!m) return;
+    const id = parseInt(m[1], 10);
+    const cached = state.listingDetail[id];
+    if (!cached || cached.error) return;
+    if (cached.sellerId === state.currentUser.id) {
+      alert('본인 글에는 채팅할 수 없어요.');
+      return;
+    }
+    navigate(`/chat/${id}/${encodeURIComponent(cached.sellerId)}`);
+  });
+
+  const chatForm = document.getElementById('chat-form');
+  if (chatForm) chatForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const room = state.chatRoom;
+    if (!room) return;
+    const input = chatForm.querySelector('input[name="body"]');
+    const body = input.value.trim();
+    if (!body) return;
+    input.disabled = true;
+    try {
+      const { message } = await api.post('/api/messages', {
+        listingId: room.listingId,
+        receiverId: room.peerId,
+        body,
+      });
+      appendMessages([message]);
+      input.value = '';
+      renderChatMessages(true);
+      // 대화방 목록 캐시 만료
+      state.conversations = null;
+    } catch (err) {
+      alert('전송 실패: ' + err.message);
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  });
+
+  // ChatView 첫 진입 시 메시지 영역 스크롤 끝으로
+  const chatList = document.getElementById('chat-messages');
+  if (chatList) {
+    requestAnimationFrame(() => { chatList.scrollTop = chatList.scrollHeight; });
+  }
+
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.addEventListener('click', () => {
+    clearToken();
+    state.currentUser = null;
+    state.listings = null; state.listingsKey = null;
+    state.listingDetail = {};
+    state.favoriteIds = new Set();
+    state.favorites = null;
+    state.favoritesLoaded = false;
+    state.conversations = null;
+    state.chatRoom = null;
+    stopChatPoll();
+    navigate('/login');
+  });
+
+  const delBtn = document.getElementById('delete-btn');
+  if (delBtn) delBtn.addEventListener('click', async () => {
+    if (!confirm('이 상품을 삭제하시겠어요?')) return;
+    try {
+      await api.delete('/api/listings/' + delBtn.dataset.id);
+      state.listings = null; state.listingsKey = null;
+      delete state.listingDetail[delBtn.dataset.id];
+      navigate('/');
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  // 관심 토글
+  document.querySelectorAll('[data-fav]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = parseInt(btn.dataset.fav, 10);
+      toggleFavorite(id);
+    });
+  });
+
+  // 이미지 슬라이드 인디케이터 — 스크롤 위치로 현재 인덱스 추적
+  const track = document.getElementById('image-track');
+  if (track) {
+    const listingId = parseInt(track.dataset.listingId, 10);
+    track.addEventListener('scroll', () => {
+      const w = track.clientWidth || 1;
+      const idx = Math.round(track.scrollLeft / w);
+      const cur = state.detailImageIndex[listingId] || 0;
+      if (idx !== cur) {
+        state.detailImageIndex[listingId] = idx;
+        // 인디케이터만 부분 갱신 (전체 render 시 스크롤 위치 잃음)
+        const cached = state.listingDetail[listingId];
+        if (cached && cached.images) {
+          const ind = track.parentElement.querySelector('.absolute.right-3.top-3');
+          if (ind) ind.textContent = `${idx + 1} / ${cached.images.length}`;
+        }
+      }
+    });
+  }
+
+  // 로그인 안 된 사용자가 상세 페이지 직접 진입 시 (fav 클릭 등) 안내
+  const logoutBtnAfterFav = document.getElementById('logout-btn');
+  void logoutBtnAfterFav;
+}
+</script>
+</body>
+</html>
