@@ -118,7 +118,7 @@ AFM-WEEKEND-6/
 - 결제 위젯 렌더 후엔 절대 `render()` 재호출 X (슬롯 DOM 통째로 날아감)
 - 토스 redirect 시 `successUrl` query 가 `location.search` 와 `location.hash` 양쪽으로 분산 — 둘 다 통합 파싱
 
-### 스크린샷 (`Q5-carrot-repl/`)
+### 스크린샷 (`Q5-carrot-repl/screenshots/`)
 - step2-home / step3-home / step4-detail-3img / step5-chat-A / step5-chat-B / step7-payment-page / step7-home-sold
 
 ---
