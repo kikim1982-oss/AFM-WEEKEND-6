@@ -87,7 +87,7 @@ AFM-WEEKEND-6/
 
 > **퀘스트**: 당근마켓 클론 — Auth + 상품 + 이미지 + 1:1 채팅 + 동네 기반 거래. ([quest.md](./Q5-carrot-repl/quest.md), [PLAN.md](./Q5-carrot-repl/PLAN.md))
 
-### 진행 상황 — 8 단계 중 7 단계 완료
+### 진행 상황 — 8 단계 모두 완료
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | 1 | UI 골격 + hash 라우팅 SPA (mock) | ✅ |
@@ -97,7 +97,7 @@ AFM-WEEKEND-6/
 | 5 | 채팅 polling (3초 증분) + 양방향 검증 | ✅ |
 | 6 | 마이페이지 (단계 4-5 안에서 자동 완성) | ✅ |
 | 7 | TossPayments 결제 → SOLD 전환 | ✅ |
-| 8 | Vercel 배포 | ⏳ 대기 |
+| 8 | Vercel 배포 → https://q5-carrot-repl.vercel.app | ✅ |
 
 ### 스택
 - Node 24 + Express 4 + Postgres (`cm_*` prefix) + JWT + bcryptjs
@@ -119,7 +119,7 @@ AFM-WEEKEND-6/
 - 토스 redirect 시 `successUrl` query 가 `location.search` 와 `location.hash` 양쪽으로 분산 — 둘 다 통합 파싱
 
 ### 스크린샷 (`Q5-carrot-repl/screenshots/`)
-- step2-home / step3-home / step4-detail-3img / step5-chat-A / step5-chat-B / step7-payment-page / step7-home-sold
+- step2-home / step3-home / step4-detail-3img / step5-chat-A / step5-chat-B / step7-payment-page / step7-home-sold / step8-vercel-prod
 
 ---
 
@@ -137,4 +137,7 @@ AFM-WEEKEND-6/
 공통: `PG*`, `JWT_SECRET`, `JWT_EXPIRES_IN`. 도구별: `IMAGEKIT_*`, `TOSS_*`, `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`.
 
 ### Vercel 배포
-Q1, Q4 는 배포 완료. Q5 는 `vercel.json` + `api/index.js` Q4 패턴 그대로 이식 예정 (단계 8).
+- Q1: 도자기 이커머스 (배포 완료)
+- Q4: 유료 콘텐츠 (배포 완료)
+- Q5: https://q5-carrot-repl.vercel.app — `vercel.json` + `api/index.js` Q4 패턴 그대로 이식
+  - `vercel link --project q5-carrot-repl` → env 14종 푸시 (production/preview/development) → `vercel deploy --prod`
