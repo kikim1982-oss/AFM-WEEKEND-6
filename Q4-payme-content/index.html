@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StockReport Pass — 주식 리포트 잠금 해제</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- TossPayments 결제위젯 v2 SDK -->
+  <script src="https://js.tosspayments.com/v2/standard"></script>
+  <!--
+    ============================================================
+    📄 Q4 퀘스트 — 유료 콘텐츠 잠금 해제 미니앱 (UI 프로토타입)
+    ============================================================
+    이 파일은 빌더가 작성한 23개 종목 분석 리포트(PDF)를
+    유료 결제 후 열람하도록 만드는 미니앱의 UI 프로토타입입니다.
+
+    ✅ 현재 단계: 백엔드 + 결제 실연동 완료
+       - DB: Postgres (Supabase)
+       - 인증: 자체 JWT
+       - 결제: TossPayments 위젯 v2 (테스트 키 — 실결제 X)
+
+    👉 다음 단계 로드맵:
+       - PDF Storage signed URL 발급 (결제 검증 후 일정 시간만 유효한 URL)
+       - 환불/결제취소 플로우
+       - 운영 배포 + 실키 교체
+    ============================================================
+  -->
+  <style>
+    /* line-clamp 폴백 (Tailwind v3 line-clamp 플러그인 대신 직접 정의) */
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* 잠금 화면 블러 효과 — 본문 영역에 적용 */
+    .locked-content {
+      filter: blur(6px);
+      user-select: none;
+      pointer-events: none;
+    }
+
+    /* 부드러운 페이드인 */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in { animation: fadeIn 0.25s ease-out; }
+
+    /* 결제 버튼 호버 글로우 */
+    .toss-btn { box-shadow: 0 4px 14px rgba(59, 130, 246, 0.25); }
+    .toss-btn:hover { box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4); }
+
+    /* 스피너 */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 0.8s linear infinite; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useContext, createContext, useMemo, useCallback } = React;
+
+    // ========================================
+    // 📚 더미 데이터 (콘텐츠 23개)
+    // ========================================
+    // 실제 서비스에서는 Supabase의 contents 테이블에서 조회
+    const CONTENTS = [
+      {
+        id: 1, ticker: "322000", title: "HD현대에너지솔루션 — 미국 IRA 수혜와 모듈 ASP 회복",
+        preview: "북미 태양광 모듈 ASP가 2개 분기 연속 반등하며 마진 회복 구간에 진입. 미국 현지 생산 확대로 IRA AMPC 크레딧 수령액이 2026년 가시화되고 있다. 다만 폴리실리콘 가격 변동성이 단기 변수.",
+        price: 2000, pdfPath: "/pdfs/322000-HD현대에너지솔루션.pdf",
+        publishedAt: "2026-04-12", category: "에너지"
+      },
+      {
+        id: 2, ticker: "000660", title: "SK하이닉스 — HBM 모멘텀과 2026 출하 전망",
+        preview: "AI 인프라 수요 확대로 HBM3E 12단 수주 가시성이 높아지고 있다. 1분기 출하량은 컨센서스를 4% 상회했으며, NVIDIA Rubin 사이클 진입 시점인 2026년 하반기에 추가 가격 협상 여력이 존재.",
+        price: 3000, pdfPath: "/pdfs/000660-SK하이닉스.pdf",
+        publishedAt: "2026-04-29", category: "반도체"
+      },
+      {
+        id: 3, ticker: "092790", title: "넥스틸 — 미국 OCTG 수요 회복과 강관 가격",
+        preview: "셰일 시추 리그 카운트가 바닥을 통과한 신호가 확인된다. OCTG(유정용 강관) 가격은 톤당 2,400달러 회복 구간이며, 4분기 매출 가이던스 상향 가능성을 점검한다.",
+        price: 1000, pdfPath: "/pdfs/092790-넥스틸.pdf",
+        publishedAt: "2026-03-21", category: "소재"
+      },
+      {
+        id: 4, ticker: "194700", title: "노바렉스 — 건기식 OEM/ODM 회복 사이클",
+        preview: "주요 고객사 발주 재개로 가동률이 70% 후반으로 회복. 신축 청주 제3공장이 본격 가동되며 고정비 부담은 잔존하나, 면역/관절 카테고리 수출 비중 확대가 마진을 방어.",
+        price: 500, pdfPath: "/pdfs/194700-노바렉스.pdf",
+        publishedAt: "2026-02-14", category: "바이오"
+      },
+      {
+        id: 5, ticker: "036480", title: "대성미생물 — 동물용 백신 라인업 확장",
+        preview: "ASF(아프리카돼지열병) 관련 진단/예방 제품군이 동남아 수출에서 의미 있는 진전. 매출 비중 작지만 영업이익 기여도는 빠르게 상승 중. R&D 파이프라인 점검.",
+        price: 500, pdfPath: "/pdfs/036480-대성미생물.pdf",
+        publishedAt: "2026-01-30", category: "바이오"
+      },
+      {
+        id: 6, ticker: "441060", title: "대한조선 — 탱커 수주잔고와 도크 회전율",
+        preview: "MR/LR 탱커 발주가 노후선 교체 사이클과 맞물려 견조. 2027년 인도분까지 슬롯이 채워지며 가격 협상력이 강화되고 있다. 후판 가격 안정화도 마진 전제 조건.",
+        price: 2000, pdfPath: "/pdfs/441060-대한조선.pdf",
+        publishedAt: "2026-04-03", category: "조선"
+      },
+      {
+        id: 7, ticker: "388040", title: "라이콤 — 광통신 부품 수주 흐름 점검",
+        preview: "데이터센터 광트랜시버 수요 확대 수혜를 어디까지 누릴 수 있는지가 핵심. 주요 고객사 BOM 진입 여부와 단가 하락 압력을 함께 본다.",
+        price: 1000, pdfPath: "/pdfs/388040-라이콤.pdf",
+        publishedAt: "2026-03-08", category: "IT"
+      },
+      {
+        id: 8, ticker: "180400", title: "메가터치 — 폴더블/온셀 터치 수혜 시나리오",
+        preview: "주요 패널 고객사의 폴더블 출하량이 가이던스를 상회. 온셀 터치 모듈 수율이 안정화되며 ASP 인상 협상이 진행 중. 단, 고객 다변화는 여전한 과제.",
+        price: 1000, pdfPath: "/pdfs/180400-메가터치.pdf",
+        publishedAt: "2026-02-27", category: "IT"
+      },
+      {
+        id: 9, ticker: "137790", title: "모티브링크 — 전기차 모터 코어 진입 진척",
+        preview: "북미 OEM 향 헤어핀 모터 코어 양산 일정이 지연됐던 부분이 점차 해소. 2026년 매출 가이던스 달성 가능성과 capex 회수 기간을 재평가한다.",
+        price: 1000, pdfPath: "/pdfs/137790-모티브링크.pdf",
+        publishedAt: "2026-03-15", category: "2차전지"
+      },
+      {
+        id: 10, ticker: "314930", title: "바이오다인 — 액상세포 진단 라이선스 마일스톤",
+        preview: "글로벌 진단업체 향 라이선스 계약의 마일스톤 인식 시점이 핵심. 매출 인식 회계 처리와 로열티율 변화에 따른 영업이익 레버리지를 정리.",
+        price: 2000, pdfPath: "/pdfs/314930-바이오다인.pdf",
+        publishedAt: "2026-04-18", category: "의료기기"
+      },
+      {
+        id: 11, ticker: "286750", title: "바이오비쥬 — 미용필러 수출 다변화",
+        preview: "브라질/멕시코 시장 진입 본격화로 중남미 매출 비중이 두 자릿수로 상승. 단가 방어와 환 헤지 전략을 함께 점검. 경쟁 심화는 리스크 요인.",
+        price: 1000, pdfPath: "/pdfs/286750-바이오비쥬.pdf",
+        publishedAt: "2026-03-26", category: "의료기기"
+      },
+      {
+        id: 12, ticker: "003000", title: "부광약품 — 신경계 파이프라인 가치 재평가",
+        preview: "파킨슨병 후보물질 임상 데이터 발표가 상반기 예정. OTC/전문의약품 매출 기반은 안정적이며, 파이프라인 가치 산정에 필요한 비교 거래 사례를 정리.",
+        price: 500, pdfPath: "/pdfs/003000-부광약품.pdf",
+        publishedAt: "2026-02-09", category: "제약"
+      },
+      {
+        id: 13, ticker: "428490", title: "쓰리빌리언 — 희귀질환 진단 매출 본격화",
+        preview: "AI 기반 희귀질환 진단 서비스의 보험 수가 적용 사례가 늘고 있다. ARR(연간 반복 매출) 환산 시 매출 가시성이 상당. 다만 적자 구간 진입 기간을 어떻게 볼지가 관건.",
+        price: 2000, pdfPath: "/pdfs/428490-쓰리빌리언.pdf",
+        publishedAt: "2026-04-22", category: "바이오"
+      },
+      {
+        id: 14, ticker: "452260", title: "에이치브이엠 — 특수합금 수주 모멘텀",
+        preview: "방산/항공우주용 특수합금 수주잔고가 사상 최대치. 구조조정 이후 고정비 절감이 본격 반영되는 시점이 2026년 하반기로 예상.",
+        price: 2000, pdfPath: "/pdfs/452260-에이치브이엠.pdf",
+        publishedAt: "2026-04-05", category: "소재"
+      },
+      {
+        id: 15, ticker: "348370", title: "엔켐 — 전해액 북미 capa 가동률",
+        preview: "북미 신규 공장의 가동률 곡선이 가이던스 대비 어떻게 움직이는지가 핵심. 주요 셀 메이커의 NCM 라인 가동률 둔화 시 단기 매출 하방 압력이 존재.",
+        price: 3000, pdfPath: "/pdfs/348370-엔켐.pdf",
+        publishedAt: "2026-04-30", category: "2차전지"
+      },
+      {
+        id: 16, ticker: "119830", title: "원텍 — 미용 의료기기 글로벌 채널 확대",
+        preview: "올리지오 후속 모델의 해외 등록 진행 상황이 매출 가이던스 신뢰도를 좌우. 일본/브라질 매출 비중 변화와 채널별 마진 차이를 같이 본다.",
+        price: 1000, pdfPath: "/pdfs/119830-원텍.pdf",
+        publishedAt: "2026-03-12", category: "의료기기"
+      },
+      {
+        id: 17, ticker: "119610", title: "인터로조 — 컬러 콘택트렌즈 수출 회복",
+        preview: "일본 채널 재고 조정이 마무리 단계. 신규 디자인 라인업 출시 시기와 마케팅비 집행 패턴이 분기 실적 변동성을 키운다.",
+        price: 1000, pdfPath: "/pdfs/119610-인터로조.pdf",
+        publishedAt: "2026-02-20", category: "의료기기"
+      },
+      {
+        id: 18, ticker: "389140", title: "자람테크놀로지 — XGS-PON 칩 매출 본격화",
+        preview: "10G 광가입자망(XGS-PON) 칩 매출이 분기마다 두 자릿수 성장. 인도 통신사 향 직납 비중 확대로 마진 구조가 개선되는 모습.",
+        price: 2000, pdfPath: "/pdfs/389140-자람테크놀로지.pdf",
+        publishedAt: "2026-04-08", category: "반도체"
+      },
+      {
+        id: 19, ticker: "314130", title: "지놈앤컴퍼니 — 마이크로바이옴 임상 데이터",
+        preview: "GEN-001 글로벌 임상 2상 중간 데이터가 하반기 발표 예정. 머크 협업 구조하에서 마일스톤 수령 가능성을 시나리오별로 정리.",
+        price: 2000, pdfPath: "/pdfs/314130-지놈앤컴퍼니.pdf",
+        publishedAt: "2026-03-30", category: "바이오"
+      },
+      {
+        id: 20, ticker: "214150", title: "클래시스 — 슈링크 유니버스 글로벌 확장",
+        preview: "브라질/태국 매출이 분기마다 신고가 경신. 소모품 매출 비중 상승으로 영업이익률이 50% 후반대로 안착. 원/달러 환율 민감도를 점검.",
+        price: 2000, pdfPath: "/pdfs/214150-클래시스.pdf",
+        publishedAt: "2026-04-25", category: "의료기기"
+      },
+      {
+        id: 21, ticker: "089030", title: "테크윙 — HBM 핸들러 점유율 상승",
+        preview: "HBM 테스트 핸들러 시장에서 압도적 점유율. 메모리 고객사들의 HBM4 양산 캐파 증설 사이클에서 capex 수혜가 가장 큰 종목 중 하나.",
+        price: 3000, pdfPath: "/pdfs/089030-테크윙.pdf",
+        publishedAt: "2026-04-29", category: "반도체"
+      },
+      {
+        id: 22, ticker: "064350", title: "현대로템 — K2 전차 폴란드 2차 실행계약",
+        preview: "폴란드 K2 2차 실행계약 규모와 현지 생산 비중이 영업이익률을 결정. 철도 부문은 자체 흑자 전환 사이클에 진입했고, 수소트램 모멘텀은 2027년 본격화 전망.",
+        price: 3000, pdfPath: "/pdfs/064350-현대로템.pdf",
+        publishedAt: "2026-04-15", category: "방산"
+      },
+      {
+        id: 23, ticker: "004310", title: "현대약품 — 당뇨 치료제 라이선스 가치",
+        preview: "당뇨 신약 후보물질 글로벌 라이선스 협상 진척이 모멘텀. 기존 OTC 매출은 견조하나 R&D 비용 증가로 단기 영업이익은 둔화. 파이프라인 NPV 산정 사례 정리.",
+        price: 500, pdfPath: "/pdfs/004310-현대약품.pdf",
+        publishedAt: "2026-02-02", category: "제약"
+      },
+    ];
+
+    // 카테고리별 색상 — Tailwind 클래스
+    const CATEGORY_STYLES = {
+      "반도체": "bg-indigo-100 text-indigo-700 border-indigo-200",
+      "바이오": "bg-emerald-100 text-emerald-700 border-emerald-200",
+      "소재": "bg-amber-100 text-amber-700 border-amber-200",
+      "조선": "bg-sky-100 text-sky-700 border-sky-200",
+      "에너지": "bg-orange-100 text-orange-700 border-orange-200",
+      "IT": "bg-cyan-100 text-cyan-700 border-cyan-200",
+      "2차전지": "bg-lime-100 text-lime-700 border-lime-200",
+      "제약": "bg-rose-100 text-rose-700 border-rose-200",
+      "의료기기": "bg-pink-100 text-pink-700 border-pink-200",
+      "방산": "bg-slate-200 text-slate-700 border-slate-300",
+    };
+
+    // 인기순용 더미 점수 (각 콘텐츠에 임의의 popularity 값 부여)
+    const POPULARITY = { 2: 100, 21: 95, 15: 92, 22: 88, 20: 85, 18: 80, 13: 75, 1: 70, 19: 68, 6: 65, 14: 60, 10: 55, 9: 50, 16: 48, 11: 45, 17: 42, 8: 40, 7: 38, 3: 35, 4: 30, 5: 25, 12: 22, 23: 20 };
+
+    // ========================================
+    // 🌐 전역 상태 — Auth, Purchase Context
+    // ========================================
+    const AuthContext = createContext(null);
+    const PurchaseContext = createContext(null);
+
+    // API 헬퍼
+    const TOKEN_KEY = 'q4_token';
+    const getToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
+    const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
+
+    async function apiFetch(path, options = {}) {
+      const token = getToken();
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(path, { ...options, headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    function AuthProvider({ children }) {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      // 마운트 시 토큰 검증 (새로고침해도 로그인 유지)
+      useEffect(() => {
+        const token = getToken();
+        if (!token) { setLoading(false); return; }
+        apiFetch('/api/auth/me')
+          .then((d) => setUser(d.user))
+          .catch(() => setToken(null))
+          .finally(() => setLoading(false));
+      }, []);
+
+      const login = useCallback(async (email, password) => {
+        const data = await apiFetch('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        });
+        setToken(data.token);
+        setUser(data.user);
+        return data.user;
+      }, []);
+
+      const register = useCallback(async (email, password) => {
+        const data = await apiFetch('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        });
+        setToken(data.token);
+        setUser(data.user);
+        return data.user;
+      }, []);
+
+      const logout = useCallback(() => {
+        setToken(null);
+        setUser(null);
+      }, []);
+
+      return (
+        <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+          {children}
+        </AuthContext.Provider>
+      );
+    }
+
+    function PurchaseProvider({ children }) {
+      // 서버(GET /api/purchases)에서 가져옴. 로그인 상태가 바뀌면 다시 fetch.
+      const { user } = useContext(AuthContext) || {};
+      const [purchases, setPurchases] = useState([]);
+      const [loading, setLoading] = useState(false);
+
+      const refresh = useCallback(async () => {
+        if (!getToken()) {
+          setPurchases([]);
+          return;
+        }
+        setLoading(true);
+        try {
+          const data = await apiFetch('/api/purchases');
+          // 서버 응답: { purchases: [{ id, content_id, amount, paid_at, order_id, title, ticker, category }] }
+          // 프론트 일관성: contentId(camelCase)도 함께 노출
+          const normalized = (data.purchases || []).map((p) => ({
+            ...p,
+            contentId: p.content_id,
+            price: p.amount,
+            purchasedAt: p.paid_at,
+            orderId: p.order_id,
+          }));
+          setPurchases(normalized);
+        } catch (e) {
+          console.warn('purchases fetch failed:', e);
+          setPurchases([]);
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      // 로그인 상태 변화 시 자동 refresh
+      useEffect(() => { refresh(); }, [user, refresh]);
+
+      const isPurchased = useCallback(
+        (contentId) => purchases.some((p) => p.contentId === contentId),
+        [purchases]
+      );
+
+      return (
+        <PurchaseContext.Provider value={{ purchases, isPurchased, refresh, loading }}>
+          {children}
+        </PurchaseContext.Provider>
+      );
+    }
+
+    const useAuth = () => useContext(AuthContext);
+    const usePurchase = () => useContext(PurchaseContext);
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+    function Button({ variant = 'primary', size = 'md', disabled, onClick, type = 'button', className = '', children, ...rest }) {
+      const variants = {
+        primary: 'bg-blue-600 hover:bg-blue-700 text-white',
+        secondary: 'bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200',
+        danger: 'bg-rose-600 hover:bg-rose-700 text-white',
+        ghost: 'bg-transparent hover:bg-slate-100 text-slate-700',
+        success: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+      };
+      const sizes = {
+        sm: 'px-3 py-1.5 text-sm',
+        md: 'px-4 py-2 text-sm',
+        lg: 'px-6 py-3 text-base',
+      };
+      const base = 'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500/40';
+      return (
+        <button
+          type={type}
+          onClick={onClick}
+          disabled={disabled}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+          {...rest}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ label, error, className = '', ...props }) {
+      return (
+        <div className={`flex flex-col gap-1 ${className}`}>
+          {label && <label className="text-sm font-medium text-slate-700">{label}</label>}
+          <input
+            className={`px-3 py-2 rounded-lg border bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition ${error ? 'border-rose-400' : 'border-slate-300'}`}
+            {...props}
+          />
+          {error && <span className="text-xs text-rose-600">{error}</span>}
+        </div>
+      );
+    }
+
+    function Card({ className = '', children, ...rest }) {
+      return (
+        <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${className}`} {...rest}>
+          {children}
+        </div>
+      );
+    }
+
+    function Badge({ children, className = '' }) {
+      return (
+        <span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full border ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    function CategoryBadge({ category }) {
+      const cls = CATEGORY_STYLES[category] || 'bg-slate-100 text-slate-700 border-slate-200';
+      return <Badge className={cls}>{category}</Badge>;
+    }
+
+    function PriceTag({ price, className = '' }) {
+      return (
+        <span className={`font-bold text-blue-600 ${className}`}>
+          ₩{price.toLocaleString('ko-KR')}
+        </span>
+      );
+    }
+
+    function Notice({ tone = 'info', children }) {
+      const tones = {
+        info: 'bg-blue-50 border-blue-200 text-blue-800',
+        warn: 'bg-amber-50 border-amber-200 text-amber-800',
+      };
+      return (
+        <div className={`rounded-lg border px-4 py-3 text-sm ${tones[tone]}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Spinner({ className = 'w-5 h-5' }) {
+      return (
+        <svg className={`spinner ${className}`} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
+          <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+        </svg>
+      );
+    }
+
+    // ========================================
+    // 🔀 Router (hash-based)
+    // ========================================
+    const RouterContext = createContext(null);
+
+    function matchRoute(pattern, path) {
+      const pSeg = pattern.split('/').filter(Boolean);
+      const aSeg = path.split('/').filter(Boolean);
+      if (pSeg.length !== aSeg.length) return null;
+      const params = {};
+      for (let i = 0; i < pSeg.length; i++) {
+        if (pSeg[i].startsWith(':')) {
+          params[pSeg[i].slice(1)] = decodeURIComponent(aSeg[i]);
+        } else if (pSeg[i] !== aSeg[i]) {
+          return null;
+        }
+      }
+      return params;
+    }
+
+    function Router({ children }) {
+      const getPath = () => {
+        // 1) hash가 있으면 hash 기반 (#/foo) 가 우선
+        const h = window.location.hash;
+        if (h && h.length > 1) {
+          return h.replace(/^#/, '') || '/';
+        }
+        // 2) hash가 없으면 pathname 사용 (TossPayments redirect 대응: /payment/success 등)
+        const p = window.location.pathname || '/';
+        return p === '' ? '/' : p;
+      };
+      const [path, setPath] = useState(getPath);
+
+      useEffect(() => {
+        const handler = () => setPath(getPath());
+        window.addEventListener('hashchange', handler);
+        window.addEventListener('popstate', handler);
+        return () => {
+          window.removeEventListener('hashchange', handler);
+          window.removeEventListener('popstate', handler);
+        };
+      }, []);
+
+      const navigate = useCallback((to) => {
+        // pathname 기반 진입 (예: /payment/success) 후 navigate를 부르면
+        // hash 라우팅으로 자연스럽게 이동시키기 위해 pathname을 / 로 정리
+        if (window.location.pathname !== '/' && window.location.pathname !== '/index.html') {
+          window.history.replaceState({}, '', '/' + (to.startsWith('#') ? to : '#' + to));
+          // history.replaceState는 hashchange를 발생시키지 않으므로 수동 갱신
+          setPath(to.replace(/^#/, '') || '/');
+          return;
+        }
+        window.location.hash = to.startsWith('#') ? to : '#' + to;
+      }, []);
+
+      // 라우트 변경 시 스크롤 상단으로
+      useEffect(() => {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }, [path]);
+
+      return (
+        <RouterContext.Provider value={{ path, navigate, params: {} }}>
+          {children}
+        </RouterContext.Provider>
+      );
+    }
+
+    function Routes({ children }) {
+      const ctx = useContext(RouterContext);
+      const routes = React.Children.toArray(children);
+      for (const r of routes) {
+        const params = matchRoute(r.props.path, ctx.path);
+        if (params) {
+          return (
+            <RouterContext.Provider value={{ ...ctx, params }}>
+              {r.props.element}
+            </RouterContext.Provider>
+          );
+        }
+      }
+      // 매칭되는 라우트 없음 → 404
+      return (
+        <div className="max-w-3xl mx-auto p-12 text-center">
+          <p className="text-6xl mb-4">🤔</p>
+          <h1 className="text-2xl font-bold mb-2">페이지를 찾을 수 없어요</h1>
+          <p className="text-slate-500 mb-6">경로: <code className="bg-slate-100 px-2 py-0.5 rounded">{ctx.path}</code></p>
+          <Link to="/" className="inline-block"><Button>홈으로</Button></Link>
+        </div>
+      );
+    }
+
+    function Route() { return null; } // declarative marker
+
+    function Link({ to, className = '', children, ...rest }) {
+      return (
+        <a
+          href={'#' + (to.startsWith('/') ? to : '/' + to)}
+          className={className}
+          {...rest}
+        >
+          {children}
+        </a>
+      );
+    }
+
+    const useRouter = () => useContext(RouterContext);
+    const useParams = () => useContext(RouterContext).params;
+
+    // ========================================
+    // 🧩 공통 / 레이아웃 컴포넌트
+    // ========================================
+    function Header() {
+      const { user, logout } = useAuth();
+      const { navigate } = useRouter();
+      return (
+        <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-slate-200">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+            <Link to="/" className="font-bold text-lg sm:text-xl text-slate-900 flex items-center gap-2">
+              <span aria-hidden>📊</span>
+              <span>StockReport <span className="text-blue-600">Pass</span></span>
+            </Link>
+            <nav className="flex items-center gap-1 sm:gap-3">
+              <Link to="/my-purchases" className="px-2 sm:px-3 py-1.5 text-sm text-slate-700 hover:text-blue-600">
+                내 구매내역
+              </Link>
+              {user ? (
+                <div className="flex items-center gap-2">
+                  <span className="hidden sm:inline text-sm text-slate-600">
+                    {user.email}님
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={() => { logout(); navigate('/'); }}>
+                    로그아웃
+                  </Button>
+                </div>
+              ) : (
+                <Link to="/login">
+                  <Button size="sm">로그인</Button>
+                </Link>
+              )}
+            </nav>
+          </div>
+        </header>
+      );
+    }
+
+    function Footer() {
+      return (
+        <footer className="mt-16 border-t border-slate-200 bg-white">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 text-sm text-slate-500 flex flex-col sm:flex-row justify-between gap-3">
+            <div>
+              © 2026 StockReport Pass — 빌더 운영 유료 콘텐츠 데모
+            </div>
+            <div className="flex gap-4">
+              <span className="text-slate-400">TossPayments 테스트 환경 · 실결제 발생 X</span>
+            </div>
+          </div>
+        </footer>
+      );
+    }
+
+    function PageContainer({ children }) {
+      return (
+        <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-10 animate-fade-in">
+          {children}
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 1) 콘텐츠 목록 (홈)
+    // ========================================
+    function HomePage() {
+      const { isPurchased } = usePurchase();
+      const [query, setQuery] = useState('');
+      const [category, setCategory] = useState('전체');
+      const [sort, setSort] = useState('latest'); // latest | priceAsc | popular
+      const [contents, setContents] = useState(null); // null = 로딩, [] = 빈
+      const [loadError, setLoadError] = useState('');
+
+      // 서버에서 PDF 매칭된 콘텐츠만 가져옴
+      useEffect(() => {
+        let alive = true;
+        apiFetch('/api/contents')
+          .then((d) => {
+            if (!alive) return;
+            const list = (d.contents || []).map((c) => ({
+              ...c,
+              publishedAt: c.published_at ? String(c.published_at).slice(0, 10) : '',
+            }));
+            setContents(list);
+          })
+          .catch((e) => { if (alive) { setLoadError(e.message || '목록을 불러오지 못했습니다.'); setContents([]); } });
+        return () => { alive = false; };
+      }, []);
+
+      const categories = useMemo(
+        () => ['전체', ...Array.from(new Set((contents || []).map((c) => c.category).filter(Boolean)))],
+        [contents]
+      );
+
+      const filtered = useMemo(() => {
+        let list = (contents || []).slice();
+        if (category !== '전체') list = list.filter((c) => c.category === category);
+        if (query.trim()) {
+          const q = query.trim().toLowerCase();
+          list = list.filter((c) =>
+            (c.title || '').toLowerCase().includes(q) ||
+            (c.ticker || '').includes(q) ||
+            (c.preview || '').toLowerCase().includes(q)
+          );
+        }
+        if (sort === 'latest') {
+          list.sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''));
+        } else if (sort === 'priceAsc') {
+          list.sort((a, b) => a.price - b.price);
+        } else if (sort === 'popular') {
+          list.sort((a, b) => (POPULARITY[b.id] || 0) - (POPULARITY[a.id] || 0));
+        }
+        return list;
+      }, [query, category, sort, contents]);
+
+      return (
+        <PageContainer>
+          {/* Hero */}
+          <section className="mb-8">
+            <div className="rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-6 sm:p-10 shadow-lg">
+              <p className="text-blue-100 text-sm font-medium mb-2">
+                빌더 큐레이션 · {contents == null ? '…' : `${contents.length}개`} 종목 분석 리포트
+              </p>
+              <h1 className="text-2xl sm:text-4xl font-bold leading-tight mb-3">
+                현장에서 추적하는 종목 리포트,<br />결제 한 번이면 전체 PDF 열람
+              </h1>
+              <p className="text-blue-100 text-sm sm:text-base max-w-2xl">
+                반도체부터 바이오·조선·2차전지까지. 짧은 미리보기로 보고, 마음에 들면 잠금을 해제하세요.
+                <span className="block mt-1 opacity-80">콘텐츠당 ₩500 ~ ₩3,000 · 영구 열람</span>
+              </p>
+            </div>
+          </section>
+
+          {/* 검색 & 필터 & 정렬 */}
+          <section className="mb-6 flex flex-col gap-3">
+            <Input
+              type="text"
+              placeholder="종목명 / 종목코드 / 키워드 검색"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="검색"
+            />
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+              <div className="flex flex-wrap gap-2">
+                {categories.map((c) => {
+                  const active = c === category;
+                  return (
+                    <button
+                      key={c}
+                      onClick={() => setCategory(c)}
+                      className={`px-3 py-1.5 text-sm rounded-full border transition ${
+                        active
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value)}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                aria-label="정렬"
+              >
+                <option value="latest">최신순</option>
+                <option value="priceAsc">가격 낮은순</option>
+                <option value="popular">인기순</option>
+              </select>
+            </div>
+            <div className="text-xs text-slate-500">
+              총 <span className="font-semibold text-slate-700">{filtered.length}</span>개 콘텐츠
+            </div>
+          </section>
+
+          {/* 카드 그리드 */}
+          {contents == null ? (
+            <Card className="p-10 text-center text-slate-500">
+              <p className="text-3xl mb-2">⏳</p>
+              <p>콘텐츠 목록을 불러오는 중…</p>
+            </Card>
+          ) : loadError ? (
+            <Card className="p-10 text-center text-rose-600">
+              <p className="text-3xl mb-2">⚠️</p>
+              <p>{loadError}</p>
+            </Card>
+          ) : filtered.length === 0 ? (
+            <Card className="p-10 text-center">
+              <p className="text-4xl mb-3">🔍</p>
+              <p className="text-slate-600">조건에 맞는 콘텐츠가 없어요.</p>
+            </Card>
+          ) : (
+            <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+              {filtered.map((c) => (
+                <ContentCard key={c.id} content={c} purchased={isPurchased(c.id)} />
+              ))}
+            </section>
+          )}
+        </PageContainer>
+      );
+    }
+
+    function ContentCard({ content, purchased }) {
+      const { navigate } = useRouter();
+      return (
+        <Card className="p-5 flex flex-col hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between mb-3">
+            <CategoryBadge category={content.category} />
+            <span className="text-xs text-slate-400 font-mono">{content.ticker}</span>
+          </div>
+          <h3 className="font-semibold text-slate-900 leading-snug mb-2 line-clamp-2 min-h-[3rem]">
+            {content.title}
+          </h3>
+          <p className="text-sm text-slate-600 leading-relaxed line-clamp-3 mb-4 flex-1">
+            {content.preview}
+          </p>
+          <div className="flex items-center justify-between text-xs text-slate-500 mb-4">
+            <PriceTag price={content.price} className="text-base" />
+            <span>{content.publishedAt}</span>
+          </div>
+          {purchased ? (
+            <Button
+              variant="success"
+              className="w-full"
+              onClick={() => navigate(`/content/${content.id}`)}
+            >
+              ✅ 구매 완료 — 열람
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              className="w-full"
+              onClick={() => navigate(`/content/${content.id}`)}
+            >
+              🔒 결제 후 열람
+            </Button>
+          )}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 2) 콘텐츠 상세 / 잠금 화면
+    // ========================================
+    function ContentDetailPage() {
+      const { id } = useParams();
+      const contentId = parseInt(id, 10);
+      // 더미는 즉시 표시(깜빡임 방지). 서버는 isPurchased를 정확히 확정하기 위함.
+      const fallback = CONTENTS.find((c) => c.id === contentId);
+      const { isPurchased } = usePurchase();
+      const { navigate } = useRouter();
+      const [serverState, setServerState] = useState(null); // { content, isPurchased }
+
+      useEffect(() => {
+        let alive = true;
+        if (!Number.isInteger(contentId) || contentId <= 0) return;
+        apiFetch(`/api/contents/${contentId}`)
+          .then((d) => { if (alive) setServerState(d); })
+          .catch((e) => console.warn('content fetch:', e));
+        return () => { alive = false; };
+      }, [contentId]);
+
+      const content = (serverState && serverState.content)
+        ? {
+            ...serverState.content,
+            // DB 컬럼명을 프론트 컨벤션에 맞게 매핑
+            publishedAt: serverState.content.published_at,
+            pdfPath: serverState.content.pdf_path,
+          }
+        : fallback;
+
+      if (!content) {
+        return (
+          <PageContainer>
+            <Card className="p-10 text-center">
+              <p className="text-4xl mb-3">😕</p>
+              <p className="text-slate-700 mb-4">존재하지 않는 콘텐츠입니다.</p>
+              <Link to="/"><Button>목록으로</Button></Link>
+            </Card>
+          </PageContainer>
+        );
+      }
+
+      // 서버 응답이 우선, 없으면 PurchaseContext 폴백
+      const purchased = serverState ? !!serverState.isPurchased : isPurchased(content.id);
+
+      return (
+        <PageContainer>
+          <Link to="/" className="text-sm text-slate-500 hover:text-blue-600 mb-4 inline-block">
+            ← 목록으로
+          </Link>
+
+          <Card className="p-6 sm:p-8 mb-6">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <CategoryBadge category={content.category} />
+              <span className="text-xs text-slate-400 font-mono">#{content.ticker}</span>
+              <span className="text-xs text-slate-400">· {content.publishedAt}</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-tight mb-3">
+              {content.title}
+            </h1>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <p className="text-slate-600 text-base leading-relaxed">
+                {content.preview}
+              </p>
+            </div>
+            <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
+              <PriceTag price={content.price} className="text-2xl" />
+              {purchased ? (
+                <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">✅ 보유 콘텐츠</Badge>
+              ) : (
+                <Badge className="bg-amber-100 text-amber-700 border-amber-200">🔒 잠금 상태</Badge>
+              )}
+            </div>
+          </Card>
+
+          {purchased ? (
+            <UnlockedView content={content} />
+          ) : (
+            <LockedView content={content} onUnlock={() => navigate(`/checkout/${content.id}`)} />
+          )}
+        </PageContainer>
+      );
+    }
+
+    function LockedView({ content, onUnlock }) {
+      // 본문이 있는 것처럼 보여주는 더미 텍스트(블러 처리됨)
+      const fakeBody = [
+        "1. 산업 환경 점검",
+        "전방 수요 사이클은 2026년 상반기를 저점으로 점진 반등 구간에 진입한 것으로 판단된다. 주요 고객사의 capex 가이던스 상향, 채널 재고 정상화 신호, 환율 우호 구간 진입이 동시에 작용하고 있다.",
+        "2. 실적 컨센서스 vs. 우리의 추정치",
+        "당사 추정치는 시장 컨센서스 대비 매출 +5%, 영업이익 +12% 수준으로 형성되어 있다. 가장 큰 차이는 ASP 가정에서 비롯되며, 4분기 단가 협상 결과에 따라 추가 상향 여지가 존재한다.",
+        "3. 모멘텀 포인트",
+        "- 신제품 양산 일정 (2026년 3분기 본격화)",
+        "- 글로벌 고객사 BOM 진입 진척",
+        "- 자체 capa 증설 완공 시점",
+        "4. 리스크",
+        "원재료 가격 변동성, 환율 급변, 주요 고객사 재고 조정이 핵심 다운사이드. 단, 시나리오별 민감도는 본문 표 참조.",
+        "5. 밸류에이션",
+        "Forward 12M PER 기준 동종업계 평균 대비 약간 낮은 수준이며, EV/EBITDA로 환산 시 historical 밴드 하단에 위치. 적정주가 산정 근거는 본문 참조.",
+      ];
+
+      return (
+        <Card className="relative p-0 overflow-hidden border border-slate-200">
+          <div className="locked-content p-6 sm:p-8 space-y-3 text-slate-700">
+            {fakeBody.map((line, i) => (
+              <p key={i} className={/^\d/.test(line) ? 'font-bold' : ''}>{line}</p>
+            ))}
+            {/* 가짜 차트 자리 */}
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div className="h-32 rounded-lg bg-gradient-to-br from-slate-200 to-slate-100" />
+              <div className="h-32 rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100" />
+            </div>
+          </div>
+
+          {/* 잠금 오버레이 */}
+          <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-white/60 to-white/90 flex items-center justify-center">
+            <div className="text-center max-w-sm px-6">
+              <div className="mx-auto w-16 h-16 rounded-full bg-slate-900 text-white flex items-center justify-center text-3xl mb-4 shadow-lg">
+                🔒
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">잠긴 콘텐츠</h2>
+              <p className="text-sm text-slate-600 mb-5">
+                결제하면 본문 전체와 첨부 PDF를 영구적으로 열람할 수 있어요.
+              </p>
+              <Button size="lg" className="w-full toss-btn" onClick={onUnlock}>
+                🔓 ₩{content.price.toLocaleString('ko-KR')} 결제하고 열람
+              </Button>
+              <p className="text-xs text-slate-400 mt-3">
+                토스페이먼츠 · 안전한 결제
+              </p>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    function UnlockedView({ content }) {
+      const [pdfUrl, setPdfUrl] = useState(null);
+      const [pdfError, setPdfError] = useState('');
+      const [loadingPdf, setLoadingPdf] = useState(false);
+
+      const hasPdf = !!content.pdfPath;
+
+      const requestPdfUrl = React.useCallback(async () => {
+        if (!hasPdf) return;
+        setPdfError('');
+        setLoadingPdf(true);
+        try {
+          const data = await apiFetch(`/api/contents/${content.id}/pdf-url`);
+          setPdfUrl(data.url);
+        } catch (e) {
+          setPdfError(e.message || 'PDF를 불러오지 못했습니다.');
+          setPdfUrl(null);
+        } finally {
+          setLoadingPdf(false);
+        }
+      }, [content.id, hasPdf]);
+
+      useEffect(() => {
+        if (!hasPdf) return;
+        let alive = true;
+        (async () => {
+          if (!alive) return;
+          await requestPdfUrl();
+        })();
+        return () => { alive = false; };
+      }, [requestPdfUrl, hasPdf]);
+
+      return (
+        <div className="space-y-4">
+          <Notice tone="info">
+            ✅ 결제가 완료된 콘텐츠입니다. PDF는 1분 동안 유효한 signed URL로 제공됩니다.
+          </Notice>
+
+          <Card className="p-0 overflow-hidden">
+            <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 flex items-center justify-between text-sm">
+              <span className="text-slate-700 font-medium">
+                📄 {content.title.split('—')[0].trim()}.pdf
+              </span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={requestPdfUrl} disabled={loadingPdf || !hasPdf}>
+                  🔄 새 URL
+                </Button>
+                {pdfUrl ? (
+                  <a href={pdfUrl} target="_blank" rel="noopener noreferrer" download>
+                    <Button size="sm">⬇ 다운로드</Button>
+                  </a>
+                ) : (
+                  <Button size="sm" disabled>⬇ 다운로드</Button>
+                )}
+              </div>
+            </div>
+            {!hasPdf ? (
+              <div className="bg-slate-50 h-72 flex flex-col items-center justify-center text-slate-500">
+                <span className="text-5xl mb-3">📄</span>
+                <p className="font-medium text-slate-700 mb-1">아직 첨부된 PDF가 없습니다.</p>
+                <p className="text-sm">이 종목은 본문 텍스트만 제공돼요.</p>
+              </div>
+            ) : pdfError ? (
+              <div className="bg-rose-50 h-72 flex flex-col items-center justify-center text-rose-600 text-sm px-6 text-center">
+                <span className="text-3xl mb-2">⚠️</span>
+                <p className="mb-3">{pdfError}</p>
+                <Button size="sm" onClick={requestPdfUrl}>다시 시도</Button>
+              </div>
+            ) : pdfUrl ? (
+              <iframe
+                src={pdfUrl}
+                title={`${content.ticker} PDF`}
+                className="w-full"
+                style={{ height: '720px', border: 0 }}
+              />
+            ) : (
+              <div className="bg-gradient-to-b from-slate-50 to-slate-100 h-72 flex flex-col items-center justify-center text-slate-500">
+                <span className="text-3xl mb-2">⏳</span>
+                <p className="text-sm">PDF 불러오는 중…</p>
+              </div>
+            )}
+          </Card>
+
+          {/* 임시 본문 텍스트 (열람 가능 상태) */}
+          <Card className="p-6 sm:p-8 space-y-4 text-slate-700 leading-relaxed">
+            <h3 className="text-xl font-bold text-slate-900">📝 리포트 본문 (데모 텍스트)</h3>
+            <p className="font-bold">1. 산업 환경 점검</p>
+            <p>전방 수요 사이클은 2026년 상반기를 저점으로 점진 반등 구간에 진입한 것으로 판단된다.
+              주요 고객사의 capex 가이던스 상향, 채널 재고 정상화 신호, 환율 우호 구간 진입이 동시에 작용하고 있다.</p>
+            <p className="font-bold">2. 실적 컨센서스 vs. 우리의 추정치</p>
+            <p>당사 추정치는 시장 컨센서스 대비 매출 +5%, 영업이익 +12% 수준으로 형성되어 있다.</p>
+            <p className="font-bold">3. 모멘텀 포인트</p>
+            <ul className="list-disc pl-6 space-y-1">
+              <li>신제품 양산 일정 (2026년 3분기 본격화)</li>
+              <li>글로벌 고객사 BOM 진입 진척</li>
+              <li>자체 capa 증설 완공 시점</li>
+            </ul>
+            <p className="font-bold">4. 밸류에이션</p>
+            <p>Forward 12M PER 기준 동종업계 평균 대비 약간 낮은 수준이며, EV/EBITDA로 환산 시 historical 밴드 하단에 위치.</p>
+          </Card>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 3) 결제 화면 (TossPayments 위젯 v2 실연동)
+    // ========================================
+    function CheckoutPage() {
+      const { id } = useParams();
+      const contentId = parseInt(id, 10);
+      const content = CONTENTS.find((c) => c.id === contentId);
+      const { user } = useAuth();
+      const { isPurchased } = usePurchase();
+      const { navigate } = useRouter();
+
+      const [order, setOrder] = useState(null);     // { orderId, orderName, amount, customerKey }
+      const [tossClientKey, setTossClientKey] = useState(null);
+      const [widgets, setWidgets] = useState(null); // 토스 위젯 인스턴스
+      const [error, setError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+
+      const renderedRef = React.useRef(false);
+
+      // ===== Hooks (early return 전 모두 호출) =====
+      const purchased = content ? isPurchased(content.id) : false;
+      const canFetch = !!user && !!content && !purchased;
+
+      // 1) 클라이언트키 + 주문 생성 — 페이지 마운트 시 한 번
+      useEffect(() => {
+        if (!canFetch) return;
+        let alive = true;
+        (async () => {
+          try {
+            const cfg = await apiFetch('/api/config');
+            if (!alive) return;
+            setTossClientKey(cfg.tossClientKey);
+
+            const o = await apiFetch('/api/orders', {
+              method: 'POST',
+              body: JSON.stringify({ contentId: content.id }),
+            });
+            if (!alive) return;
+            setOrder(o);
+          } catch (e) {
+            if (alive) setError(e.message || '주문 생성에 실패했습니다.');
+          }
+        })();
+        return () => { alive = false; };
+      }, [canFetch, content && content.id]);
+
+      // 2) 토스 위젯 초기화 + 렌더링 — 주문이 준비되면 한 번만
+      useEffect(() => {
+        if (!tossClientKey || !order) return;
+        if (typeof window.TossPayments !== 'function') {
+          setError('TossPayments SDK 로드 실패. 페이지를 새로고침해 주세요.');
+          return;
+        }
+        let alive = true;
+        (async () => {
+          try {
+            const tossPayments = window.TossPayments(tossClientKey);
+            const w = tossPayments.widgets({ customerKey: order.customerKey });
+            await w.setAmount({ currency: 'KRW', value: order.amount });
+
+            if (!renderedRef.current) {
+              await Promise.all([
+                w.renderPaymentMethods({
+                  selector: '#toss-payment-methods',
+                  variantKey: 'DEFAULT',
+                }),
+                w.renderAgreement({
+                  selector: '#toss-agreement',
+                  variantKey: 'AGREEMENT',
+                }),
+              ]);
+              renderedRef.current = true;
+            }
+            if (alive) setWidgets(w);
+          } catch (e) {
+            console.error('toss widget init failed:', e);
+            if (alive) setError('결제 위젯을 불러올 수 없습니다: ' + (e.message || ''));
+          }
+        })();
+        return () => { alive = false; };
+      }, [tossClientKey, order]);
+
+      // ===== 모든 hook 호출 후 early return =====
+      if (!content) {
+        return (
+          <PageContainer>
+            <Card className="p-10 text-center">
+              <p>존재하지 않는 콘텐츠입니다.</p>
+              <Link to="/" className="mt-4 inline-block"><Button>목록으로</Button></Link>
+            </Card>
+          </PageContainer>
+        );
+      }
+      if (purchased) {
+        return (
+          <PageContainer>
+            <Card className="p-10 text-center">
+              <p className="text-4xl mb-3">✅</p>
+              <p className="mb-4 text-slate-700">이미 구매한 콘텐츠입니다.</p>
+              <Button onClick={() => navigate(`/content/${content.id}`)}>열람으로 이동</Button>
+            </Card>
+          </PageContainer>
+        );
+      }
+
+      const handlePay = async () => {
+        if (!user) {
+          alert('로그인이 필요합니다.');
+          navigate('/login');
+          return;
+        }
+        if (!widgets || !order) return;
+        setError('');
+        setSubmitting(true);
+        try {
+          await widgets.requestPayment({
+            orderId: order.orderId,
+            orderName: order.orderName,
+            successUrl: `${window.location.origin}/payment/success?contentId=${content.id}`,
+            failUrl: `${window.location.origin}/payment/fail?contentId=${content.id}`,
+            customerEmail: user.email,
+            customerName: user.email.split('@')[0],
+          });
+          // requestPayment가 redirect를 일으키므로 아래는 보통 도달하지 않음
+        } catch (e) {
+          setSubmitting(false);
+          if (e.code === 'USER_CANCEL') {
+            // 사용자 취소 — 조용히 무시
+            return;
+          }
+          setError(e.message || '결제 요청 중 오류가 발생했습니다.');
+        }
+      };
+
+      return (
+        <PageContainer>
+          <div className="max-w-xl mx-auto">
+            <Link to={`/content/${content.id}`} className="text-sm text-slate-500 hover:text-blue-600 mb-4 inline-block">
+              ← 콘텐츠로 돌아가기
+            </Link>
+
+            <h1 className="text-2xl font-bold text-slate-900 mb-1">결제하기</h1>
+            <p className="text-sm text-slate-500 mb-6">아래 콘텐츠의 잠금을 해제합니다.</p>
+
+            {/* 주문 요약 */}
+            <Card className="p-6 mb-5">
+              <p className="text-xs text-slate-400 mb-2 font-medium">주문 요약</p>
+              <div className="flex items-start gap-3 mb-4">
+                <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center text-2xl flex-shrink-0">
+                  📈
+                </div>
+                <div className="flex-1 min-w-0">
+                  <CategoryBadge category={content.category} />
+                  <h3 className="font-semibold text-slate-900 mt-1.5 leading-snug">
+                    {content.title}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1 font-mono">#{content.ticker}</p>
+                </div>
+              </div>
+              <div className="border-t border-slate-100 pt-3 space-y-2 text-sm">
+                <div className="flex justify-between text-slate-600">
+                  <span>콘텐츠 가격</span>
+                  <span>₩{content.price.toLocaleString('ko-KR')}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>할인</span>
+                  <span>₩0</span>
+                </div>
+                <div className="flex justify-between font-bold text-slate-900 pt-2 border-t border-slate-100 text-base">
+                  <span>총 결제 금액</span>
+                  <PriceTag price={content.price} className="text-lg" />
+                </div>
+              </div>
+            </Card>
+
+            {/* 구매자 정보 */}
+            <Card className="p-6 mb-5">
+              <p className="text-xs text-slate-400 mb-2 font-medium">구매자</p>
+              {user ? (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-slate-900">{user.email.split('@')[0]}</p>
+                    <p className="text-sm text-slate-500">{user.email}</p>
+                  </div>
+                  <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">로그인됨</Badge>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-500">로그인 후 결제 가능합니다.</p>
+                  <Link to="/login"><Button size="sm" variant="secondary">로그인</Button></Link>
+                </div>
+              )}
+            </Card>
+
+            {!user ? (
+              <Notice tone="warn">로그인이 필요합니다. 위 로그인 버튼을 눌러 로그인해 주세요.</Notice>
+            ) : (
+              <>
+                {/* 토스 결제위젯 */}
+                <Card className="p-4 mb-3">
+                  <div id="toss-payment-methods" />
+                </Card>
+                <Card className="p-4 mb-5">
+                  <div id="toss-agreement" />
+                </Card>
+
+                {error && (
+                  <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {error}
+                  </div>
+                )}
+
+                <Notice tone="info">
+                  ℹ️ 토스 테스트 환경입니다. 실제 결제는 발생하지 않습니다.
+                </Notice>
+
+                {/* 결제 버튼 */}
+                <div className="mt-5">
+                  <Button
+                    size="lg"
+                    className="w-full toss-btn"
+                    onClick={handlePay}
+                    disabled={!widgets || submitting}
+                  >
+                    {submitting ? (
+                      <><Spinner className="w-5 h-5" /> 결제창으로 이동 중…</>
+                    ) : !widgets ? (
+                      <><Spinner className="w-5 h-5" /> 결제위젯 준비 중…</>
+                    ) : (
+                      <>💳 ₩{content.price.toLocaleString('ko-KR')} 결제하기</>
+                    )}
+                  </Button>
+                  <p className="text-xs text-slate-400 mt-3 text-center">
+                    결제 완료 시 즉시 콘텐츠가 열람 가능합니다 · 영구 소장
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        </PageContainer>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 3-2) 결제 성공
+    // ========================================
+    // TossPayments는 successUrl로 paymentKey/orderId/amount를 location.search에 붙여 redirect한다.
+    // 해시 라우팅 환경에서도 successUrl을 별도 정적 경로(/payment/success)로 두면
+    // location.search가 그대로 보존되므로 안전. 서버는 SPA 폴백으로 index.html을 서빙.
+    function PaymentSuccessPage() {
+      const { navigate } = useRouter();
+      const { refresh } = usePurchase();
+      const [status, setStatus] = useState('processing'); // processing | success | error
+      const [error, setError] = useState('');
+      const [contentId, setContentId] = useState(null);
+
+      useEffect(() => {
+        // location.search + hash 안의 query 둘 다 안전하게 파싱
+        const params = parsePaymentRedirectParams();
+        const paymentKey = params.get('paymentKey');
+        const orderId = params.get('orderId');
+        const amount = params.get('amount');
+        const cidParam = params.get('contentId');
+
+        if (!paymentKey || !orderId || !amount) {
+          setStatus('error');
+          setError('결제 정보가 올바르지 않습니다.');
+          return;
+        }
+
+        (async () => {
+          try {
+            const data = await apiFetch('/api/payments/confirm', {
+              method: 'POST',
+              body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
+            });
+            setContentId(data.contentId || (cidParam ? Number(cidParam) : null));
+            await refresh();
+            // confirm 성공 후 URL에서 민감 파라미터 제거 (새로고침 시 재confirm 방지)
+            try {
+              window.history.replaceState({}, '', '/payment/success');
+            } catch {}
+            setStatus('success');
+          } catch (e) {
+            setStatus('error');
+            setError(e.message || '결제 승인에 실패했습니다.');
+          }
+        })();
+      }, []);
+
+      return (
+        <PageContainer>
+          <div className="max-w-md mx-auto">
+            <Card className="p-8 text-center">
+              {status === 'processing' && (
+                <>
+                  <div className="flex justify-center mb-4 text-blue-600">
+                    <Spinner className="w-10 h-10" />
+                  </div>
+                  <h1 className="text-xl font-bold text-slate-900 mb-2">결제 승인 중…</h1>
+                  <p className="text-sm text-slate-500">잠시만 기다려 주세요.</p>
+                </>
+              )}
+              {status === 'success' && (
+                <>
+                  <p className="text-5xl mb-3">✅</p>
+                  <h1 className="text-2xl font-bold text-slate-900 mb-2">결제 완료</h1>
+                  <p className="text-sm text-slate-500 mb-6">
+                    콘텐츠 잠금이 해제되었습니다. 지금 바로 열람하실 수 있어요.
+                  </p>
+                  <div className="space-y-2">
+                    {contentId && (
+                      <Button
+                        size="lg"
+                        className="w-full"
+                        onClick={() => navigate(`/content/${contentId}`)}
+                      >
+                        📖 콘텐츠 보러가기
+                      </Button>
+                    )}
+                    <Button
+                      size="md"
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => navigate('/my-purchases')}
+                    >
+                      구매내역 보기
+                    </Button>
+                  </div>
+                </>
+              )}
+              {status === 'error' && (
+                <>
+                  <p className="text-5xl mb-3">⚠️</p>
+                  <h1 className="text-xl font-bold text-slate-900 mb-2">결제 승인 실패</h1>
+                  <p className="text-sm text-rose-600 mb-5">{error}</p>
+                  <Button onClick={() => navigate('/')} variant="secondary">
+                    홈으로
+                  </Button>
+                </>
+              )}
+            </Card>
+          </div>
+        </PageContainer>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 3-3) 결제 실패
+    // ========================================
+    function PaymentFailPage() {
+      const { navigate } = useRouter();
+      const params = parsePaymentRedirectParams();
+      const code = params.get('code');
+      const message = params.get('message');
+      const contentId = params.get('contentId');
+
+      return (
+        <PageContainer>
+          <div className="max-w-md mx-auto">
+            <Card className="p-8 text-center">
+              <p className="text-5xl mb-3">😢</p>
+              <h1 className="text-2xl font-bold text-slate-900 mb-2">결제가 완료되지 않았어요</h1>
+              <div className="my-4 p-4 bg-slate-50 rounded-lg text-left text-sm text-slate-700">
+                {code && <div className="mb-1"><span className="text-slate-500">에러 코드:</span> <code className="font-mono">{code}</code></div>}
+                {message && <div><span className="text-slate-500">메시지:</span> {message}</div>}
+                {!code && !message && <div className="text-slate-500">사용자가 결제를 취소했거나 결제창이 종료되었습니다.</div>}
+              </div>
+              <p className="text-xs text-slate-400 mb-5">결제 금액은 청구되지 않습니다. 다시 시도해 주세요.</p>
+              <div className="space-y-2">
+                {contentId && (
+                  <Button
+                    size="lg"
+                    className="w-full"
+                    onClick={() => navigate(`/checkout/${contentId}`)}
+                  >
+                    🔄 다시 결제하기
+                  </Button>
+                )}
+                <Button variant="secondary" className="w-full" onClick={() => navigate('/')}>
+                  홈으로
+                </Button>
+              </div>
+            </Card>
+          </div>
+        </PageContainer>
+      );
+    }
+
+    // 해시 라우팅과 토스 redirect의 충돌을 방어하는 query 파서.
+    // location.search와 hash 안의 query string을 모두 병합해서 파싱한다.
+    function parsePaymentRedirectParams() {
+      const params = new URLSearchParams();
+      // 1) location.search (TossPayments가 paymentKey/orderId/amount를 여기 붙임)
+      try {
+        const s = new URLSearchParams(window.location.search);
+        s.forEach((v, k) => params.set(k, v));
+      } catch {}
+      // 2) hash 안의 query string (예: #/payment/success?paymentType=NORMAL)
+      try {
+        const h = window.location.hash || '';
+        const idx = h.indexOf('?');
+        if (idx !== -1) {
+          const hs = new URLSearchParams(h.slice(idx + 1));
+          hs.forEach((v, k) => params.set(k, v));
+        }
+      } catch {}
+      return params;
+    }
+
+    // ========================================
+    // 📄 페이지 — 4) 내 구매내역
+    // ========================================
+    function MyPurchasesPage() {
+      const { user } = useAuth();
+      const { purchases, refresh, loading } = usePurchase();
+      const { navigate } = useRouter();
+
+      const total = purchases.reduce((sum, p) => sum + (p.price || 0), 0);
+
+      // 서버에서 받은 purchases는 이미 title/ticker/category를 포함.
+      // 로컬 CONTENTS 더미가 있으면 보강용으로 우선, 없으면 서버 필드를 사용.
+      const items = purchases
+        .map((p) => {
+          const local = CONTENTS.find((c) => c.id === p.contentId);
+          const content = local || {
+            id: p.contentId,
+            title: p.title,
+            ticker: p.ticker,
+            category: p.category,
+          };
+          return { ...p, content };
+        })
+        .filter((x) => x.content && x.content.id)
+        .sort((a, b) => String(b.purchasedAt || '').localeCompare(String(a.purchasedAt || '')));
+
+      if (!user) {
+        return (
+          <PageContainer>
+            <Card className="p-10 text-center">
+              <p className="text-4xl mb-3">🔐</p>
+              <h2 className="text-xl font-bold mb-2">로그인이 필요합니다</h2>
+              <p className="text-slate-500 mb-5">구매내역을 보려면 로그인해 주세요.</p>
+              <Link to="/login"><Button>로그인</Button></Link>
+            </Card>
+          </PageContainer>
+        );
+      }
+
+      return (
+        <PageContainer>
+          <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">내 구매내역</h1>
+              <p className="text-sm text-slate-500 mt-1">
+                {user.email} · 총 {items.length}건 · 합계 ₩{total.toLocaleString('ko-KR')}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={refresh}
+              disabled={loading}
+            >
+              {loading ? <Spinner className="w-4 h-4" /> : '🔄'} 새로고침
+            </Button>
+          </div>
+
+          {items.length === 0 ? (
+            <Card className="p-12 text-center">
+              <p className="text-4xl mb-3">🛒</p>
+              <h2 className="text-lg font-semibold text-slate-900 mb-2">아직 구매한 콘텐츠가 없어요</h2>
+              <p className="text-slate-500 mb-5">관심 종목 리포트의 잠금을 해제해 보세요.</p>
+              <Link to="/"><Button>콘텐츠 둘러보기</Button></Link>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {items.map((p) => (
+                <Card key={p.orderId} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <CategoryBadge category={p.content.category} />
+                      <span className="text-xs text-slate-400 font-mono">#{p.content.ticker}</span>
+                    </div>
+                    <h3 className="font-semibold text-slate-900 leading-snug truncate">
+                      {p.content.title}
+                    </h3>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+                      <span>구매일 {String(p.purchasedAt || '').slice(0, 10)}</span>
+                      {p.orderId && <><span>·</span><span className="font-mono truncate max-w-[180px]">{p.orderId}</span></>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 sm:flex-col sm:items-end justify-between">
+                    <PriceTag price={p.price} />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => navigate(`/content/${p.content.id}`)}
+                    >
+                      📖 다시 열람
+                    </Button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </PageContainer>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 5) 로그인 / 회원가입 (실제 JWT 인증)
+    // ========================================
+    function LoginPage() {
+      const { user, login, register } = useAuth();
+      const { navigate } = useRouter();
+      const [mode, setMode] = useState('login'); // 'login' | 'register'
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+
+      useEffect(() => {
+        if (user) navigate('/');
+      }, [user]);
+
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const PW_RE = /^\d{8}$/;
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!EMAIL_RE.test(email)) {
+          setError('이메일 형식이 올바르지 않습니다.');
+          return;
+        }
+        if (!PW_RE.test(password)) {
+          setError('비밀번호는 숫자 8자리여야 합니다.');
+          return;
+        }
+        setError('');
+        setSubmitting(true);
+        try {
+          if (mode === 'login') await login(email, password);
+          else await register(email, password);
+          navigate('/');
+        } catch (err) {
+          setError(err.message || '요청 처리 중 오류가 발생했습니다.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const isLogin = mode === 'login';
+
+      return (
+        <PageContainer>
+          <div className="max-w-md mx-auto">
+            <h1 className="text-2xl font-bold text-slate-900 mb-1">{isLogin ? '로그인' : '회원가입'}</h1>
+            <p className="text-sm text-slate-500 mb-6">
+              {isLogin ? '콘텐츠 구매 및 열람을 위해 로그인이 필요합니다.' : '이메일과 8자리 숫자 비밀번호로 가입하세요.'}
+            </p>
+
+            <Card className="p-6 sm:p-8">
+              <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => { setMode('login'); setError(''); }}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${isLogin ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                >
+                  로그인
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMode('register'); setError(''); }}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${!isLogin ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                >
+                  회원가입
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <Input
+                  type="email"
+                  label="이메일"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+                <Input
+                  type="password"
+                  label="비밀번호 (숫자 8자리)"
+                  placeholder="12345678"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                  required
+                  inputMode="numeric"
+                  pattern="\d{8}"
+                  maxLength={8}
+                  autoComplete={isLogin ? 'current-password' : 'new-password'}
+                />
+                {error && (
+                  <p className="text-sm text-rose-600">{error}</p>
+                )}
+                <Button type="submit" size="lg" className="w-full" disabled={submitting}>
+                  {submitting ? '처리 중...' : (isLogin ? '로그인' : '회원가입')}
+                </Button>
+              </form>
+              <div className="mt-5 pt-5 border-t border-slate-100 text-xs text-slate-400 text-center">
+                JWT 기반 자체 인증 · 비밀번호 형식: 숫자 8자리
+              </div>
+            </Card>
+          </div>
+        </PageContainer>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      return (
+        <AuthProvider>
+          <PurchaseProvider>
+            <Router>
+              <div className="min-h-screen flex flex-col">
+                <Header />
+                <div className="flex-1">
+                  <Routes>
+                    <Route path="/" element={<HomePage />} />
+                    <Route path="/content/:id" element={<ContentDetailPage />} />
+                    <Route path="/checkout/:id" element={<CheckoutPage />} />
+                    <Route path="/payment/success" element={<PaymentSuccessPage />} />
+                    <Route path="/payment/fail" element={<PaymentFailPage />} />
+                    <Route path="/my-purchases" element={<MyPurchasesPage />} />
+                    <Route path="/login" element={<LoginPage />} />
+                  </Routes>
+                </div>
+                <Footer />
+              </div>
+            </Router>
+          </PurchaseProvider>
+        </AuthProvider>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

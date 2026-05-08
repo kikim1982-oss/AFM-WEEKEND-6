@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>이미지 업로드 테스트</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Pretendard Variable', 'Pretendard', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            ink: '#0F172A',
+            subtle: '#64748B',
+            line: '#E2E8F0',
+            surface: '#F8FAFC',
+            accent: '#0EA5E9',
+            accentDark: '#0284C7',
+            success: '#10B981',
+            danger: '#EF4444',
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <style>
+    body {
+      font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      word-break: keep-all;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.25s ease-out;
+    }
+    @keyframes pulseScale {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
+    .animate-pulse-scale {
+      animation: pulseScale 1.4s ease-in-out infinite;
+    }
+    .scrollbar-thin::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .scrollbar-thin::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 999px;
+    }
+    .scrollbar-thin::-webkit-scrollbar-track {
+      background: transparent;
+    }
+  </style>
+</head>
+<body class="bg-surface text-ink min-h-screen">
+  <div id="root"></div>
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+    // ========================================
+    // Constants
+    // ========================================
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    const ACCEPTED_TYPES = 'image/*';
+    const IMAGEKIT_UPLOAD_URL = 'https://upload.imagekit.io/api/v1/files/upload';
+    const UPLOAD_STATUS = {
+      PENDING: 'pending',
+      UPLOADING: 'uploading',
+      UPLOADED: 'uploaded',
+      FAILED: 'failed',
+    };
+
+    // ========================================
+    // Utility Functions
+    // ========================================
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const units = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return `${(bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+    }
+
+    function loadImageDimensions(file) {
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          resolve({ width: img.naturalWidth, height: img.naturalHeight, url });
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve({ width: 0, height: 0, url: '' });
+        };
+        img.src = url;
+      });
+    }
+
+    function generateId() {
+      return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    async function fetchImageKitAuth() {
+      const res = await fetch('/api/imagekit-auth');
+      if (!res.ok) throw new Error(`인증 실패 (HTTP ${res.status})`);
+      const json = await res.json();
+      if (!json.success || !json.data) throw new Error(json.message || '인증 응답이 올바르지 않습니다');
+      return json.data;
+    }
+
+    async function uploadFileToImageKit(file, auth) {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('fileName', file.name);
+      form.append('publicKey', auth.publicKey);
+      form.append('token', auth.token);
+      form.append('expire', String(auth.expire));
+      form.append('signature', auth.signature);
+      form.append('useUniqueFileName', 'true');
+
+      const res = await fetch(IMAGEKIT_UPLOAD_URL, { method: 'POST', body: form });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.message || `업로드 실패 (HTTP ${res.status})`);
+      }
+      return json;
+    }
+
+    // ========================================
+    // Icons (inline SVG)
+    // ========================================
+    const Icon = {
+      Upload: ({ className = 'w-6 h-6' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      ),
+      Image: ({ className = 'w-6 h-6' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+      ),
+      Trash: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        </svg>
+      ),
+      X: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      ),
+      AlertCircle: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+      ),
+      Check: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      ),
+      File: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+      ),
+      Loader: ({ className = 'w-4 h-4' }) => (
+        <svg className={`${className} animate-spin`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="2" x2="12" y2="6"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+          <line x1="2" y1="12" x2="6" y2="12"/>
+          <line x1="18" y1="12" x2="22" y2="12"/>
+          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+        </svg>
+      ),
+      Copy: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+      ),
+      ExternalLink: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          <polyline points="15 3 21 3 21 9"/>
+          <line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+      ),
+      Refresh: ({ className = 'w-4 h-4' }) => (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      ),
+    };
+
+    // ========================================
+    // Design System: Button
+    // ========================================
+    function Button({ variant = 'primary', size = 'md', disabled, onClick, className = '', children, type = 'button' }) {
+      const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed';
+      const variants = {
+        primary: 'bg-ink text-white hover:bg-slate-800 active:bg-slate-900',
+        secondary: 'bg-white text-ink border border-line hover:bg-slate-50 active:bg-slate-100',
+        danger: 'bg-white text-danger border border-line hover:bg-red-50 hover:border-red-200 active:bg-red-100',
+        ghost: 'text-ink hover:bg-slate-100 active:bg-slate-200',
+      };
+      const sizes = {
+        sm: 'h-8 px-3 text-sm',
+        md: 'h-10 px-4 text-sm',
+        lg: 'h-12 px-6 text-base',
+      };
+      return (
+        <button
+          type={type}
+          disabled={disabled}
+          onClick={onClick}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    // ========================================
+    // Design System: Card
+    // ========================================
+    function Card({ className = '', children }) {
+      return (
+        <div className={`bg-white border border-line rounded-2xl ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    // ========================================
+    // Design System: Badge
+    // ========================================
+    function Badge({ variant = 'neutral', className = '', children }) {
+      const variants = {
+        neutral: 'bg-slate-100 text-slate-700',
+        accent: 'bg-sky-100 text-sky-700',
+        success: 'bg-emerald-100 text-emerald-700',
+        danger: 'bg-red-100 text-red-700',
+      };
+      return (
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${variants[variant]} ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    // ========================================
+    // Component: ErrorList
+    // ========================================
+    function ErrorList({ errors, onDismiss }) {
+      if (!errors.length) return null;
+      return (
+        <div className="space-y-2 mb-6">
+          {errors.map((err) => (
+            <div
+              key={err.id}
+              className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 animate-fade-in"
+            >
+              <Icon.AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <span className="font-medium break-all">{err.fileName}</span>
+                <span className="text-red-600/80"> · {err.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onDismiss(err.id)}
+                className="text-red-500 hover:text-red-700 transition-colors flex-shrink-0"
+                aria-label="에러 닫기"
+              >
+                <Icon.X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ========================================
+    // Component: DropZone
+    // ========================================
+    function DropZone({ onFiles, isDragging, setIsDragging, fileInputRef }) {
+      const handleDragOver = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isDragging) setIsDragging(true);
+      };
+      const handleDragLeave = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Only clear when leaving the drop zone itself (not its children)
+        if (e.currentTarget.contains(e.relatedTarget)) return;
+        setIsDragging(false);
+      };
+      const handleDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        if (droppedFiles.length) onFiles(droppedFiles);
+      };
+      const handleClick = () => {
+        fileInputRef.current?.click();
+      };
+      const handleKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleClick();
+        }
+      };
+
+      return (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="이미지 파일을 끌어다 놓거나 클릭해서 선택"
+          onClick={handleClick}
+          onKeyDown={handleKeyDown}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`
+            relative flex flex-col items-center justify-center
+            px-6 py-14 sm:py-20 rounded-3xl
+            border-2 border-dashed cursor-pointer
+            transition-all duration-300 ease-out
+            focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2
+            ${isDragging
+              ? 'border-accent bg-sky-50 scale-[1.01]'
+              : 'border-line bg-white hover:border-slate-300 hover:bg-slate-50'}
+          `}
+        >
+          <div className={`
+            flex items-center justify-center w-14 h-14 rounded-2xl mb-4
+            transition-colors duration-200
+            ${isDragging ? 'bg-accent text-white animate-pulse-scale' : 'bg-slate-100 text-slate-600'}
+          `}>
+            <Icon.Upload className="w-6 h-6" />
+          </div>
+          <p className="text-base sm:text-lg font-semibold text-ink mb-1">
+            {isDragging ? '여기에 놓아주세요' : '이미지를 끌어다 놓거나 클릭하세요'}
+          </p>
+          <p className="text-sm text-subtle mb-5">
+            PNG, JPG, GIF, WebP 등 모든 이미지 형식 · 최대 {formatBytes(MAX_FILE_SIZE)}
+          </p>
+          <Button variant="secondary" size="md" onClick={(e) => { e.stopPropagation(); handleClick(); }}>
+            <Icon.Image className="w-4 h-4" />
+            파일 선택
+          </Button>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Component: UploadStatusBadge
+    // ========================================
+    function UploadStatusBadge({ status }) {
+      if (status === UPLOAD_STATUS.PENDING) {
+        return (
+          <Badge variant="neutral" className="bg-white/95 backdrop-blur-sm shadow-sm">
+            대기 중
+          </Badge>
+        );
+      }
+      if (status === UPLOAD_STATUS.UPLOADING) {
+        return (
+          <Badge variant="accent" className="bg-white/95 backdrop-blur-sm shadow-sm">
+            <Icon.Loader className="w-3 h-3 mr-1" />
+            업로드 중
+          </Badge>
+        );
+      }
+      if (status === UPLOAD_STATUS.UPLOADED) {
+        return (
+          <Badge variant="success" className="bg-white/95 backdrop-blur-sm shadow-sm">
+            <Icon.Check className="w-3 h-3 mr-1" />
+            업로드 완료
+          </Badge>
+        );
+      }
+      return (
+        <Badge variant="danger" className="bg-white/95 backdrop-blur-sm shadow-sm">
+          <Icon.AlertCircle className="w-3 h-3 mr-1" />
+          업로드 실패
+        </Badge>
+      );
+    }
+
+    // ========================================
+    // Component: ImageThumbnail
+    // ========================================
+    function ImageThumbnail({ item, onRemove, onRetry }) {
+      const [imgError, setImgError] = useState(false);
+      const [copied, setCopied] = useState(false);
+
+      const copyUrl = useCallback(async () => {
+        if (!item.uploadedUrl) return;
+        try {
+          await navigator.clipboard.writeText(item.uploadedUrl);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch (_) {
+          // ignore
+        }
+      }, [item.uploadedUrl]);
+
+      const isUploading = item.status === UPLOAD_STATUS.UPLOADING;
+
+      return (
+        <div className="group relative bg-white border border-line rounded-2xl overflow-hidden hover:shadow-md hover:border-slate-300 transition-all duration-200 animate-fade-in">
+          {/* Preview */}
+          <div className="relative aspect-square bg-slate-100 overflow-hidden">
+            {!imgError && item.previewUrl ? (
+              <img
+                src={item.previewUrl}
+                alt={item.file.name}
+                className="w-full h-full object-cover"
+                onError={() => setImgError(true)}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-slate-400">
+                <Icon.Image className="w-10 h-10" />
+              </div>
+            )}
+
+            {/* Uploading overlay */}
+            {isUploading && (
+              <div className="absolute inset-0 bg-white/40 backdrop-blur-[1px] flex items-center justify-center">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full shadow-md text-xs font-medium text-ink">
+                  <Icon.Loader className="w-4 h-4 text-accent" />
+                  업로드 중…
+                </div>
+              </div>
+            )}
+
+            {/* Status badge (top-left) */}
+            <div className="absolute top-2 left-2">
+              <UploadStatusBadge status={item.status} />
+            </div>
+
+            {/* Remove button (visible on hover) */}
+            <button
+              type="button"
+              onClick={() => onRemove(item.id)}
+              disabled={isUploading}
+              className="absolute top-2 right-2 flex items-center justify-center w-8 h-8 rounded-full bg-white/95 backdrop-blur shadow-sm border border-line text-slate-600 hover:text-danger hover:border-red-200 hover:bg-red-50 transition-all duration-200 opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-danger disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label={`${item.file.name} 삭제`}
+            >
+              <Icon.Trash className="w-4 h-4" />
+            </button>
+
+            {/* Dimension badge */}
+            {item.width > 0 && (
+              <div className="absolute bottom-2 left-2">
+                <Badge variant="neutral" className="bg-black/70 text-white backdrop-blur-sm">
+                  {item.width} × {item.height}
+                </Badge>
+              </div>
+            )}
+          </div>
+
+          {/* Info */}
+          <div className="p-3 sm:p-4 space-y-2">
+            <p className="text-sm font-medium text-ink truncate" title={item.file.name}>
+              {item.file.name}
+            </p>
+            <div className="flex items-center justify-between gap-2 text-xs text-subtle">
+              <span className="truncate">{item.file.type || 'unknown'}</span>
+              <span className="flex-shrink-0 font-medium tabular-nums">{formatBytes(item.file.size)}</span>
+            </div>
+
+            {item.status === UPLOAD_STATUS.UPLOADED && item.uploadedUrl && (
+              <div className="pt-2 mt-1 border-t border-line space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    readOnly
+                    value={item.uploadedUrl}
+                    onFocus={(e) => e.target.select()}
+                    className="flex-1 min-w-0 px-2 py-1 text-[11px] text-subtle bg-slate-50 border border-line rounded-md font-mono truncate focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                  <button
+                    type="button"
+                    onClick={copyUrl}
+                    className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+                    aria-label="URL 복사"
+                    title={copied ? '복사됨' : 'URL 복사'}
+                  >
+                    {copied ? <Icon.Check className="w-3.5 h-3.5 text-success" /> : <Icon.Copy className="w-3.5 h-3.5" />}
+                  </button>
+                  <a
+                    href={item.uploadedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+                    aria-label="새 탭에서 열기"
+                    title="새 탭에서 열기"
+                  >
+                    <Icon.ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {item.status === UPLOAD_STATUS.FAILED && (
+              <div className="pt-2 mt-1 border-t border-line space-y-2">
+                <p className="text-[11px] text-danger leading-snug break-words">
+                  {item.errorMessage || '업로드에 실패했습니다.'}
+                </p>
+                <Button variant="secondary" size="sm" onClick={() => onRetry(item.id)} className="w-full">
+                  <Icon.Refresh className="w-3.5 h-3.5" />
+                  다시 시도
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Component: SummaryBar
+    // ========================================
+    function SummaryBar({ items, onClear }) {
+      const totalSize = useMemo(() => items.reduce((sum, it) => sum + it.file.size, 0), [items]);
+      const counts = useMemo(() => {
+        const c = { uploading: 0, uploaded: 0, failed: 0, pending: 0 };
+        items.forEach((it) => {
+          if (it.status === UPLOAD_STATUS.UPLOADING) c.uploading += 1;
+          else if (it.status === UPLOAD_STATUS.UPLOADED) c.uploaded += 1;
+          else if (it.status === UPLOAD_STATUS.FAILED) c.failed += 1;
+          else c.pending += 1;
+        });
+        return c;
+      }, [items]);
+
+      if (!items.length) return null;
+
+      return (
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-ink font-medium">
+              <Icon.Image className="w-4 h-4 text-slate-500" />
+              {items.length}개 이미지
+            </div>
+            <span className="text-line">·</span>
+            <span className="text-subtle tabular-nums">{formatBytes(totalSize)}</span>
+
+            {counts.uploading > 0 && (
+              <Badge variant="accent" className="ml-1">
+                <Icon.Loader className="w-3 h-3 mr-1" />
+                {counts.uploading} 업로드 중
+              </Badge>
+            )}
+            {counts.uploaded > 0 && (
+              <Badge variant="success" className="ml-1">
+                <Icon.Check className="w-3 h-3 mr-1" />
+                {counts.uploaded} 완료
+              </Badge>
+            )}
+            {counts.failed > 0 && (
+              <Badge variant="danger" className="ml-1">
+                <Icon.AlertCircle className="w-3 h-3 mr-1" />
+                {counts.failed} 실패
+              </Badge>
+            )}
+          </div>
+          <Button variant="danger" size="sm" onClick={onClear} disabled={counts.uploading > 0}>
+            <Icon.Trash className="w-4 h-4" />
+            전체 초기화
+          </Button>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Page: UploadTester
+    // ========================================
+    function UploadTester() {
+      const [items, setItems] = useState([]);
+      const [errors, setErrors] = useState([]);
+      const [isDragging, setIsDragging] = useState(false);
+      const fileInputRef = useRef(null);
+
+      // Cleanup blob URLs when items removed/unmounted
+      useEffect(() => {
+        return () => {
+          items.forEach((it) => it.previewUrl && URL.revokeObjectURL(it.previewUrl));
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+
+      const addError = useCallback((fileName, message) => {
+        const id = generateId();
+        setErrors((prev) => [...prev, { id, fileName, message }]);
+        // Auto-dismiss after 6 seconds
+        setTimeout(() => {
+          setErrors((prev) => prev.filter((e) => e.id !== id));
+        }, 6000);
+      }, []);
+
+      const dismissError = useCallback((id) => {
+        setErrors((prev) => prev.filter((e) => e.id !== id));
+      }, []);
+
+      const updateItem = useCallback((id, patch) => {
+        setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+      }, []);
+
+      const uploadItem = useCallback(async (item) => {
+        updateItem(item.id, { status: UPLOAD_STATUS.UPLOADING, errorMessage: '' });
+        try {
+          const auth = await fetchImageKitAuth();
+          const result = await uploadFileToImageKit(item.file, auth);
+          updateItem(item.id, {
+            status: UPLOAD_STATUS.UPLOADED,
+            uploadedUrl: result.url,
+            uploadedFileId: result.fileId,
+            uploadedName: result.name,
+          });
+        } catch (err) {
+          updateItem(item.id, {
+            status: UPLOAD_STATUS.FAILED,
+            errorMessage: err.message || '알 수 없는 오류',
+          });
+          addError(item.file.name, `업로드 실패: ${err.message || '알 수 없는 오류'}`);
+        }
+      }, [updateItem, addError]);
+
+      const retryItem = useCallback((id) => {
+        const target = items.find((it) => it.id === id);
+        if (target) uploadItem(target);
+      }, [items, uploadItem]);
+
+      const processFiles = useCallback(async (fileList) => {
+        const files = Array.from(fileList);
+        const validNew = [];
+
+        for (const file of files) {
+          if (!file.type.startsWith('image/')) {
+            addError(file.name, `이미지 파일이 아닙니다 (${file.type || '알 수 없는 형식'})`);
+            continue;
+          }
+          if (file.size > MAX_FILE_SIZE) {
+            addError(file.name, `파일 크기 초과 (${formatBytes(file.size)} > ${formatBytes(MAX_FILE_SIZE)})`);
+            continue;
+          }
+          const { width, height, url } = await loadImageDimensions(file);
+          validNew.push({
+            id: generateId(),
+            file,
+            previewUrl: url,
+            width,
+            height,
+            status: UPLOAD_STATUS.PENDING,
+            uploadedUrl: '',
+            uploadedFileId: '',
+            uploadedName: '',
+            errorMessage: '',
+          });
+        }
+
+        if (validNew.length) {
+          setItems((prev) => [...prev, ...validNew]);
+          // Kick off uploads in parallel
+          validNew.forEach((it) => uploadItem(it));
+        }
+      }, [addError, uploadItem]);
+
+      const handleFileInputChange = (e) => {
+        if (e.target.files?.length) {
+          processFiles(e.target.files);
+          // Reset so the same file can be re-selected
+          e.target.value = '';
+        }
+      };
+
+      const removeItem = useCallback((id) => {
+        setItems((prev) => {
+          const target = prev.find((it) => it.id === id);
+          if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+          return prev.filter((it) => it.id !== id);
+        });
+      }, []);
+
+      const clearAll = useCallback(() => {
+        items.forEach((it) => it.previewUrl && URL.revokeObjectURL(it.previewUrl));
+        setItems([]);
+        setErrors([]);
+      }, [items]);
+
+      return (
+        <div className="min-h-screen px-4 sm:px-6 py-10 sm:py-16">
+          <div className="max-w-5xl mx-auto">
+            {/* Header */}
+            <header className="mb-8 sm:mb-10">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-subtle mb-3">
+                <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block" />
+                Image Upload Test
+              </div>
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-ink tracking-tight mb-2">
+                이미지 업로드 테스트
+              </h1>
+              <p className="text-sm sm:text-base text-subtle leading-relaxed max-w-2xl">
+                드래그 앤 드롭 또는 파일 선택으로 이미지를 추가하면 자동으로 ImageKit에 업로드되고, 업로드된 URL을 바로 확인·복사할 수 있습니다.
+              </p>
+            </header>
+
+            {/* Hidden native file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_TYPES}
+              multiple
+              className="sr-only"
+              onChange={handleFileInputChange}
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+
+            {/* Drop zone */}
+            <div className="mb-6">
+              <DropZone
+                onFiles={processFiles}
+                isDragging={isDragging}
+                setIsDragging={setIsDragging}
+                fileInputRef={fileInputRef}
+              />
+            </div>
+
+            {/* Errors */}
+            <ErrorList errors={errors} onDismiss={dismissError} />
+
+            {/* Summary */}
+            <SummaryBar items={items} onClear={clearAll} />
+
+            {/* Gallery */}
+            {items.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                {items.map((item) => (
+                  <ImageThumbnail key={item.id} item={item} onRemove={removeItem} onRetry={retryItem} />
+                ))}
+              </div>
+            ) : (
+              <Card className="p-10 sm:p-14 text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mb-4">
+                  <Icon.File className="w-6 h-6" />
+                </div>
+                <p className="text-sm font-medium text-ink mb-1">아직 업로드된 이미지가 없습니다</p>
+                <p className="text-xs text-subtle">위 영역에 이미지를 끌어다 놓거나 파일 선택 버튼을 누르세요</p>
+              </Card>
+            )}
+
+            {/* Footer hints */}
+            <footer className="mt-10 pt-6 border-t border-line">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs text-subtle">
+                <div>
+                  <p className="font-semibold text-ink/70 mb-1">허용 형식</p>
+                  <p>image/* (모든 이미지 MIME 타입)</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-ink/70 mb-1">파일 크기 제한</p>
+                  <p>최대 {formatBytes(MAX_FILE_SIZE)} (개당)</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-ink/70 mb-1">업로드 처리</p>
+                  <p>ImageKit.io · 서버 인증 (HMAC-SHA1)</p>
+                </div>
+              </div>
+            </footer>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // App
+    // ========================================
+    function App() {
+      return <UploadTester />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

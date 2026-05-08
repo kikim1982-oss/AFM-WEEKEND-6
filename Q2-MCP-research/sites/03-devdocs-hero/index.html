@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>DevDocsHero — API docs that update themselves</title>
+<meta name="description" content="Auto-generate beautiful API documentation from your code on every commit. No more stale Swagger files." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script async src="https://js.stripe.com/v3/buy-button.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100">
+<header class="px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
+  <div class="font-bold text-xl">⚡ DevDocsHero</div>
+  <nav class="hidden sm:flex gap-6 text-sm text-slate-300">
+    <a href="#features">Features</a><a href="#pricing">Pricing</a>
+  </nav>
+</header>
+
+<section class="px-6 pt-12 pb-20 max-w-5xl mx-auto text-center">
+  <span class="inline-block bg-cyan-900/50 text-cyan-300 text-xs font-semibold px-3 py-1 rounded-full">For backend teams who hate writing docs</span>
+  <h1 class="mt-6 text-4xl sm:text-6xl font-extrabold tracking-tight">API docs that <span class="text-cyan-400">update themselves.</span></h1>
+  <p class="mt-6 text-lg text-slate-300 max-w-2xl mx-auto">Drop a GitHub Action in. On every push, DevDocsHero scans routes, types, and examples — then publishes pixel-perfect docs at docs.yourdomain.com.</p>
+  <div class="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
+    <a href="#pricing" class="bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-semibold px-6 py-3 rounded-lg">Connect GitHub</a>
+  </div>
+</section>
+
+<section id="features" class="bg-slate-800 py-20 px-6">
+  <div class="max-w-5xl mx-auto grid sm:grid-cols-3 gap-8">
+    <div><div class="text-3xl">🔁</div><h3 class="mt-3 font-bold text-lg">Always in sync</h3><p class="text-slate-400 mt-2">Your code is the source of truth. Docs rebuild on every merge.</p></div>
+    <div><div class="text-3xl">🌐</div><h3 class="mt-3 font-bold text-lg">Custom domain</h3><p class="text-slate-400 mt-2">docs.yourdomain.com on the paid plan. SSL handled.</p></div>
+    <div><div class="text-3xl">🧪</div><h3 class="mt-3 font-bold text-lg">Try-it-now console</h3><p class="text-slate-400 mt-2">Built-in API playground with auth tokens scoped to docs viewers.</p></div>
+  </div>
+</section>
+
+<section id="pricing" class="py-20 px-6 max-w-3xl mx-auto text-center">
+  <h2 class="text-3xl font-bold">Pricing</h2>
+  <div class="mt-10 bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-sm">
+    <div class="text-5xl font-extrabold">$29<span class="text-lg text-slate-400 font-medium">/mo</span></div>
+    <ul class="mt-6 text-left space-y-2 text-slate-300 text-sm">
+      <li>✓ Unlimited repos</li>
+      <li>✓ Custom domain + SSL</li>
+      <li>✓ Try-it-now console</li>
+      <li>✓ Versioned docs</li>
+    </ul>
+    <div class="mt-8">
+      <stripe-buy-button buy-button-id="buy_btn_REPLACE_ME" publishable-key="pk_test_REPLACE_ME"></stripe-buy-button>
+      <p class="text-xs text-slate-500 mt-3">Stripe Buy Button placeholder.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="py-10 text-center text-xs text-slate-500">© 2026 DevDocsHero · <a href="../../index.html" class="underline">Back to portfolio</a></footer>
+</body></html>

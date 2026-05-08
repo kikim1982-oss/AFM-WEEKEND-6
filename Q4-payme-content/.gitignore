@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+*.log
+.DS_Store
+
+# Vercel
+.vercel
+
+# 유료 PDF 원본 — Supabase Storage 에 업로드 후 사용. 공개 저장소에 올리지 않음.
+PDF-list/

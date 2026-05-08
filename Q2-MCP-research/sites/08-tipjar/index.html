@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TipJar — One link. Every way to get tipped.</title>
+<meta name="description" content="One link in your bio. Fans tip you in cash, card, Apple Pay, or crypto. You get paid. No platform takes 30%." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script async src="https://js.stripe.com/v3/buy-button.js"></script>
+</head>
+<body class="bg-fuchsia-50 text-slate-900">
+<header class="px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
+  <div class="font-bold text-xl">💸 TipJar</div>
+  <nav class="hidden sm:flex gap-6 text-sm text-slate-600">
+    <a href="#how">How</a><a href="#pricing">Pricing</a>
+  </nav>
+</header>
+
+<section class="px-6 pt-12 pb-20 max-w-5xl mx-auto text-center">
+  <span class="inline-block bg-fuchsia-200 text-fuchsia-800 text-xs font-semibold px-3 py-1 rounded-full">2.9% + 30¢. That's it. No 30% platform cut.</span>
+  <h1 class="mt-6 text-4xl sm:text-6xl font-extrabold tracking-tight">One link. <span class="text-fuchsia-600">Every</span> way to get tipped.</h1>
+  <p class="mt-6 text-lg text-slate-700 max-w-2xl mx-auto">tipjar.gg/yourname works in any bio. Fans tip with Apple Pay, card, Cash App, or crypto. Funds land in your bank weekly.</p>
+  <div class="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
+    <a href="#pricing" class="bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-semibold px-6 py-3 rounded-lg">Claim your handle</a>
+  </div>
+</section>
+
+<section id="how" class="bg-white py-20 px-6">
+  <div class="max-w-5xl mx-auto grid sm:grid-cols-3 gap-8">
+    <div><div class="text-3xl">🔗</div><h3 class="mt-3 font-bold text-lg">One link, anywhere</h3><p class="text-slate-600 mt-2">Bio, end-screens, business cards, stickers. Mobile-optimized.</p></div>
+    <div><div class="text-3xl">💳</div><h3 class="mt-3 font-bold text-lg">Every payment method</h3><p class="text-slate-600 mt-2">Apple Pay, Google Pay, card, Cash App, ETH, USDC. Fans pick.</p></div>
+    <div><div class="text-3xl">📈</div><h3 class="mt-3 font-bold text-lg">No middleman tax</h3><p class="text-slate-600 mt-2">Stripe fees + 0%. Compare that to YouTube/Twitch's cut.</p></div>
+  </div>
+</section>
+
+<section id="pricing" class="py-20 px-6 max-w-3xl mx-auto text-center">
+  <h2 class="text-3xl font-bold">Free to start. Pro unlocks branding.</h2>
+  <div class="mt-10 bg-white border border-slate-200 rounded-2xl p-8 shadow-sm">
+    <div class="text-5xl font-extrabold">$4<span class="text-lg text-slate-500 font-medium">/mo</span></div>
+    <ul class="mt-6 text-left space-y-2 text-slate-700 text-sm">
+      <li>✓ Custom branding (no TipJar logo)</li>
+      <li>✓ Goal bars and shoutouts</li>
+      <li>✓ Crypto payouts</li>
+    </ul>
+    <div class="mt-8">
+      <stripe-buy-button buy-button-id="buy_btn_REPLACE_ME" publishable-key="pk_test_REPLACE_ME"></stripe-buy-button>
+      <p class="text-xs text-slate-400 mt-3">Stripe Buy Button placeholder.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="py-10 text-center text-xs text-slate-500">© 2026 TipJar · <a href="../../index.html" class="underline">Back to portfolio</a></footer>
+</body></html>

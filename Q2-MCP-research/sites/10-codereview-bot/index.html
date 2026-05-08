@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>CodeReviewBot — A senior reviewer for solo devs</title>
+<meta name="description" content="No teammate to review your PR? CodeReviewBot reads the diff, your codebase context, and leaves the comments a senior would." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script async src="https://js.stripe.com/v3/buy-button.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100">
+<header class="px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
+  <div class="font-bold text-xl">🤖 CodeReviewBot</div>
+  <nav class="hidden sm:flex gap-6 text-sm text-slate-300">
+    <a href="#features">Features</a><a href="#pricing">Pricing</a>
+  </nav>
+</header>
+
+<section class="px-6 pt-12 pb-20 max-w-5xl mx-auto text-center">
+  <span class="inline-block bg-violet-900/50 text-violet-300 text-xs font-semibold px-3 py-1 rounded-full">Built for solo devs and 2-person teams</span>
+  <h1 class="mt-6 text-4xl sm:text-6xl font-extrabold tracking-tight">A <span class="text-violet-400">senior reviewer</span><br/>that's awake at 3am.</h1>
+  <p class="mt-6 text-lg text-slate-300 max-w-2xl mx-auto">Install the GitHub App. Open a PR. CodeReviewBot reads the diff, the surrounding code, and your past commits — then leaves comments a thoughtful senior would.</p>
+  <div class="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
+    <a href="#pricing" class="bg-violet-500 hover:bg-violet-400 text-slate-900 font-semibold px-6 py-3 rounded-lg">Install on GitHub</a>
+  </div>
+</section>
+
+<section id="features" class="bg-slate-900 py-20 px-6">
+  <div class="max-w-5xl mx-auto grid sm:grid-cols-3 gap-8">
+    <div><div class="text-3xl">🧩</div><h3 class="mt-3 font-bold text-lg">Reads your codebase</h3><p class="text-slate-400 mt-2">Knows your patterns. Won't suggest changes that contradict your own helpers.</p></div>
+    <div><div class="text-3xl">🎯</div><h3 class="mt-3 font-bold text-lg">Comments where it matters</h3><p class="text-slate-400 mt-2">Subtle bugs, missing edge cases, naming. Skips nits unless asked.</p></div>
+    <div><div class="text-3xl">⚙️</div><h3 class="mt-3 font-bold text-lg">Tunable</h3><p class="text-slate-400 mt-2">Strict / standard / lenient. House style file supported.</p></div>
+  </div>
+</section>
+
+<section id="pricing" class="py-20 px-6 max-w-3xl mx-auto text-center">
+  <h2 class="text-3xl font-bold">Pricing</h2>
+  <div class="mt-10 bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-sm">
+    <div class="text-5xl font-extrabold">$12<span class="text-lg text-slate-400 font-medium">/repo/mo</span></div>
+    <ul class="mt-6 text-left space-y-2 text-slate-300 text-sm">
+      <li>✓ Unlimited PRs</li>
+      <li>✓ Codebase indexing</li>
+      <li>✓ Custom style guide</li>
+      <li>✓ Public OSS repos free</li>
+    </ul>
+    <div class="mt-8">
+      <stripe-buy-button buy-button-id="buy_btn_REPLACE_ME" publishable-key="pk_test_REPLACE_ME"></stripe-buy-button>
+      <p class="text-xs text-slate-500 mt-3">Stripe Buy Button placeholder.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="py-10 text-center text-xs text-slate-500">© 2026 CodeReviewBot · <a href="../../index.html" class="underline">Back to portfolio</a></footer>
+</body></html>

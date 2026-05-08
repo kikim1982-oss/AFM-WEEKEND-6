@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RentRadar — Don't get ripped off on rent</title>
+<meta name="description" content="Paste a rental listing. We tell you if it's overpriced, fairly priced, or a steal — backed by 12M comparable listings." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script async src="https://js.stripe.com/v3/buy-button.js"></script>
+</head>
+<body class="bg-amber-50 text-slate-900">
+<header class="px-6 py-5 max-w-5xl mx-auto flex items-center justify-between">
+  <div class="font-bold text-xl">🏠 RentRadar</div>
+  <nav class="hidden sm:flex gap-6 text-sm text-slate-600">
+    <a href="#how">How</a><a href="#pricing">Pricing</a>
+  </nav>
+</header>
+
+<section class="px-6 pt-12 pb-20 max-w-5xl mx-auto text-center">
+  <span class="inline-block bg-amber-200 text-amber-800 text-xs font-semibold px-3 py-1 rounded-full">37% of US listings are overpriced. We catch them.</span>
+  <h1 class="mt-6 text-4xl sm:text-6xl font-extrabold tracking-tight">Don't get <span class="text-amber-600">ripped off</span> on rent.</h1>
+  <p class="mt-6 text-lg text-slate-700 max-w-2xl mx-auto">Paste a Zillow, Redfin, or Apartments.com link. RentRadar compares it to 12M past listings in your zip and tells you what fair rent looks like — in seconds.</p>
+  <div class="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
+    <a href="#pricing" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-6 py-3 rounded-lg">Check a listing</a>
+  </div>
+</section>
+
+<section id="how" class="bg-white py-20 px-6">
+  <div class="max-w-5xl mx-auto grid sm:grid-cols-3 gap-8">
+    <div><div class="text-3xl">📋</div><h3 class="mt-3 font-bold text-lg">Paste a link</h3><p class="text-slate-600 mt-2">Any major rental site. We pull beds, baths, sqft, and neighborhood.</p></div>
+    <div><div class="text-3xl">📊</div><h3 class="mt-3 font-bold text-lg">Get a fair-price band</h3><p class="text-slate-600 mt-2">P25 / P50 / P75 from real recent rentals — not asking prices.</p></div>
+    <div><div class="text-3xl">💬</div><h3 class="mt-3 font-bold text-lg">Negotiation script</h3><p class="text-slate-600 mt-2">If overpriced, we draft the email to ask for $X less.</p></div>
+  </div>
+</section>
+
+<section id="pricing" class="py-20 px-6 max-w-3xl mx-auto text-center">
+  <h2 class="text-3xl font-bold">Pay once when you move</h2>
+  <div class="mt-10 bg-white border border-slate-200 rounded-2xl p-8 shadow-sm">
+    <div class="text-5xl font-extrabold">$9<span class="text-lg text-slate-500 font-medium"> one-time</span></div>
+    <ul class="mt-6 text-left space-y-2 text-slate-700 text-sm">
+      <li>✓ 30 days unlimited checks</li>
+      <li>✓ Negotiation scripts</li>
+      <li>✓ PDF report you can show roommates</li>
+    </ul>
+    <div class="mt-8">
+      <stripe-buy-button buy-button-id="buy_btn_REPLACE_ME" publishable-key="pk_test_REPLACE_ME"></stripe-buy-button>
+      <p class="text-xs text-slate-400 mt-3">Stripe Buy Button placeholder.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="py-10 text-center text-xs text-slate-500">© 2026 RentRadar · <a href="../../index.html" class="underline">Back to portfolio</a></footer>
+</body></html>

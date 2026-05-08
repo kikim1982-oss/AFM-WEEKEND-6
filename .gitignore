@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment variables (NEVER commit — contains DB credentials, JWT secrets, Toss/Supabase/ImageKit keys)
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel/
+
+# Build / cache
+.next/
+dist/
+build/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test artifacts
+*.tmp
+.playwright-mcp/
+
+# Q4 paid PDF originals — uploaded to Supabase Storage, not committed
+Q4-payme-content/PDF-list/
+
+# Claude config (local)
+.claude/
