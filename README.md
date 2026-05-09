@@ -5,10 +5,10 @@ AI 공장장 부트캠프 2기 주말반 퀘스트들을 한 저장소에 묶어
 
 ```
 AFM-WEEKEND-6/
-├── Q1-my-ecommerce/      → 도자기 이커머스 (Vercel 배포 완료)
+├── Q1-my-ecommerce/      → 도자기 이커머스 (https://dalhangari.vercel.app)
 ├── Q2-MCP-research/      → MCP 서버 조사 자료
 ├── Q3-My-personal-project-ERP/  → 우진산업 ERP 구축 컨설팅 기록
-├── Q4-payme-content/     → 유료 콘텐츠 잠금해제 미니앱 (Vercel 배포 완료)
+├── Q4-payme-content/     → 유료 콘텐츠 잠금해제 미니앱 (https://q4-payme-content.vercel.app)
 ├── Q5-carrot-repl/       → 당근마켓 클론 (단계 7/8 진행 중)
 └── image-upload-test/    → ImageKit 업로드 검증용 미니 샌드박스
 ```
@@ -23,7 +23,7 @@ AFM-WEEKEND-6/
 - 관리자 상품 등록 → ImageKit 업로드 → 상품 목록에 실제 이미지 표시
 - 장바구니 → 토스 결제 위젯 → 서버 confirm API → `orders` / `order_items` 저장
 - 마이페이지 주문 내역 (본인 `user_id` 만 조회)
-- Vercel 배포 완료
+- Vercel 배포: https://dalhangari.vercel.app
 
 ### 스택
 - Express 5 + Postgres(`pg`) + JWT(`jsonwebtoken`) + bcryptjs
@@ -64,7 +64,7 @@ AFM-WEEKEND-6/
 - `purchases` 테이블에 `(user_id, content_id)` 저장 + UNIQUE 가드 (이중결제 차단)
 - Supabase Storage 에 실제 PDF 업로드, 결제자에게만 **1분짜리 signed URL** 발급
 - 마이페이지 구매 이력 (`/api/purchases`)
-- Vercel 배포 완료
+- Vercel 배포: https://q4-payme-content.vercel.app
 
 ### 스택
 - Express 4 + Postgres(`pg`) + JWT + bcryptjs + cors + dotenv
@@ -137,7 +137,7 @@ AFM-WEEKEND-6/
 공통: `PG*`, `JWT_SECRET`, `JWT_EXPIRES_IN`. 도구별: `IMAGEKIT_*`, `TOSS_*`, `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`.
 
 ### Vercel 배포
-- Q1: 도자기 이커머스 (배포 완료)
-- Q4: 유료 콘텐츠 (배포 완료)
+- Q1: https://dalhangari.vercel.app
+- Q4: https://q4-payme-content.vercel.app
 - Q5: https://q5-carrot-repl.vercel.app — `vercel.json` + `api/index.js` Q4 패턴 그대로 이식
   - `vercel link --project q5-carrot-repl` → env 14종 푸시 (production/preview/development) → `vercel deploy --prod`
